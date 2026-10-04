@@ -8,10 +8,12 @@
     }
   },
   "coverage": {
+    "backfilling": [],
     "cancelled": [],
     "commits": 1,
     "missing": [],
     "pending": [],
+    "retried": [],
     "since": "d31bc87798663f665f8e4d07be97a0633e560482"
   },
   "head": "d31bc87798663f665f8e4d07be97a0633e560482",
