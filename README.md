@@ -37,7 +37,8 @@ and those runs, and works out:
   a healthy one.
 - **red detection**: for each red builder, its regression range (last green .. first red) and the
   suspects in it, oldest first. V0-GAR-02 bisects these.
-- **coverage**: every main commit since the repo's first post-submit run must have a result. A
+- **coverage**: every main commit since the repo's first post-submit run must have a result (a repo with
+  no run yet is a warning: it is not onboarded). A
   missing or cancelled one is a hole a culprit can hide in, and fails the check.
 
 ```sh

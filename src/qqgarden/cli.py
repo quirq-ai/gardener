@@ -87,7 +87,9 @@ def cmd_status(args) -> int:
         bad = []
         for s in items:
             if not s.coverage.since:
-                bad.append(f"{s.repo}: no post-submit result on any listed main commit")
+                # Not onboarded yet: coverage starts with a repo's first post-submit run.
+                print(f"::warning::{s.repo}: no post-submit result on any listed main commit yet; "
+                      + "; ".join(s.notes or ["is its post-submit workflow delivered?"]), file=sys.stderr)
             bad += [f"{s.repo}: {x}: no post-submit result" for x in s.coverage.missing]
             bad += [f"{s.repo}: {x}: post-submit run ended without a verdict" for x in s.coverage.cancelled]
         for b in bad:

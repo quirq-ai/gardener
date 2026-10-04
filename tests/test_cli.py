@@ -37,10 +37,10 @@ def test_a_hole_fails_coverage(config_root, tmp_path, capsys):
     assert "innernet-postsubmit: post-submit run ended without a verdict" in err
 
 
-def test_no_results_fails_coverage(config_root, tmp_path, capsys):
+def test_a_repo_with_no_results_yet_is_a_warning(config_root, tmp_path, capsys):
     snap = snapshot(tmp_path, "mm", "gg")
-    assert run(config_root, snap, "--require-coverage") == 1
-    assert "xo-space: no post-submit result on any listed main commit" in capsys.readouterr().err
+    assert run(config_root, snap, "--require-coverage") == 0
+    assert "::warning::xo-space: no post-submit result on any listed main commit yet" in capsys.readouterr().err
 
 
 def test_red_is_reported(config_root, tmp_path, capsys):
