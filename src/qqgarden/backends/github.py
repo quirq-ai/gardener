@@ -148,6 +148,18 @@ class Backend:
             "query": "mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id}) "
                      "{ clientMutationId } }", "variables": {"id": pr["node_id"]}})
 
+    def commit_url(self, repo: Repo, sha: str) -> str:
+        return f"https://github.com/{repo.slug}/commit/{sha}"
+
+    def landed(self, repo: Repo, url: str) -> str:
+        """The revert PR's merge commit once merged, else "". Read-only, so no identity needed."""
+        number = url.rstrip("/").rsplit("/", 1)[-1]
+        if not number.isdigit():
+            return ""
+        pr = self._get(f"/repos/{repo.slug}/pulls/{number}") or {}
+        sha = pr.get("merge_commit_sha") if pr.get("merged_at") else ""
+        return self.commit_url(repo, sha) if sha else ""
+
     def rerun(self, repo: Repo, run_url: str) -> bool:
         token = self._need_identity()
         run_id = run_url.rstrip("/").rsplit("/runs/", 1)[-1].split("/")[0]

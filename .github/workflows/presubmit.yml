@@ -47,3 +47,5 @@ jobs:
             "$RUNNER_TEMP/bisect.json" "$culprit" || { echo "::error::bisection did not name the planted culprit $culprit"; exit 1; }
       - name: a planted build break is reverted within 30 min, and an 11th revert in 24 h is refused (V0-GAR-03 done-when, offline half)
         run: python -m pytest -q -p no:cacheprovider tests/test_cycle.py::test_planted_build_break_is_reverted_within_30_minutes tests/test_policy.py::test_flood_refuses_the_eleventh_revert_in_24h -v
+      - name: every auto-revert links culprit, revert and fix (V0-GAR-04 done-when, offline half)
+        run: python -m pytest -q -p no:cacheprovider tests/test_records.py::test_every_auto_revert_links_culprit_revert_and_fix -v

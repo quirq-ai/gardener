@@ -82,7 +82,8 @@ def verified(spans: list[RedSpan]) -> bool:
 
 
 def run(cfg: dict, repos: list[Repo], backend, ledger: Ledger, policy: Policy, now: datetime,
-        grace: timedelta, limit: int, evidence=None, dry_run: bool = False) -> list[Outcome]:
+        grace: timedelta, limit: int, evidence=None, dry_run: bool = False,
+        records=None) -> list[Outcome]:
     if evidence is None:
         from qqgarden.evidence import Evidence
         evidence = Evidence(backend, {r.name: r for r in repos})
@@ -90,6 +91,39 @@ def run(cfg: dict, repos: list[Repo], backend, ledger: Ledger, policy: Policy, n
     for repo in repos:
         status, commits = postsubmit.observe(backend, repo, limit, now, grace)
         out += handle_repo(cfg, repo, status, commits, backend, ledger, policy, now, evidence, dry_run)
+    if records is not None and not dry_run:
+        out += follow_up(repos, backend, ledger, records)
+    return out
+
+
+def follow_up(repos: list[Repo], backend, ledger: Ledger, records) -> list[Outcome]:
+    """V0-GAR-04: every created revert has a failure record and postmortem stub; once the revert
+    has landed, the record links it as the fix. Safe to repeat: records and links are idempotent."""
+    by_name = {r.name: r for r in repos}
+    links = ledger.revert_links()
+    out = []
+    for e in ledger.entries():
+        repo, url = by_name.get(e.repo), links.get(e.id)
+        if repo is None or not url:
+            continue
+        forge = backend.forge
+        culprit_url = forge.commit_url(repo, e.culprit)
+        g = groups_mod.Group(repo=e.repo, first_bad=e.culprit, last_good=e.last_good,
+                             suspects=[e.culprit], builders=[], kind=e.kind, tests=list(e.tests),
+                             runs=list(e.runs))
+        summary = f'{e.kind} break in {e.repo}: reverted "{e.title or e.culprit[:12]}"'
+        state = records.open(repo, e.culprit, culprit_url, e.culprit_landed_at, url, g, summary)
+        step = "recorded"
+        if not state.links.get("fix"):
+            landed = forge.landed(repo, url)
+            if landed:
+                state = records.link_fix(repo, e.culprit, landed)
+                step = "fix-linked"
+        ledger.sync("failures", f"failures: {e.id}")
+        out.append(Outcome(repo=e.repo, group=e.group, kind=e.kind, step=step, culprit=e.culprit,
+                           revert=url, reason=f"record {state.record.id}: "
+                           + ("closed" if state.closed else "needs " + ", ".join(state.missing)),
+                           runs=list(e.runs)))
     return out
 
 
@@ -171,7 +205,8 @@ def revert_culprit(cfg, repo: Repo, g: groups_mod.Group, culprit: Commit, backen
             # cannot both take the last slot under the cap.
             ledger.reserve(Entry(id=rid, repo=repo.name, culprit=culprit.sha, kind=g.kind,
                                  action=action.value, created_at=timestamp(now), reason=reason,
-                                 group=g.key, runs=g.runs),
+                                 group=g.key, runs=g.runs, last_good=g.last_good, title=culprit.title,
+                                 culprit_landed_at=culprit.landed_at, tests=g.tests),
                            recheck=lambda: "" if judge().action is not Action.REFUSE else judge().reason)
         forge.push(made.workdir, repo, branch)
         url = forge.open_revert(repo, branch, made.base, f'Revert "{made.title}"',

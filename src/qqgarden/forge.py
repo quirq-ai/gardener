@@ -9,6 +9,8 @@
     open_revert(repo, branch, base, title, body, assignees) -> str   # its URL
     queue_land(repo, url)                    # land it through the gate (merge queue)
     rerun(repo, run_url) -> bool             # re-run a failed post-submit run, to verify a culprit
+    commit_url(repo, sha) -> str
+    landed(repo, url) -> str                 # the revert's commit URL once it is on the branch, else ""
 
 A forge that cannot write (no bot identity) raises NoIdentity from the write calls, and the
 cycle then only reports what it would have done.

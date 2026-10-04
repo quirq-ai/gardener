@@ -7,4 +7,4 @@ commit = "a698da40d6ef9a3d79ccd9393417f094ec935123"   # main after #6
 
 [test-pipelines]
 source = "https://github.com/quirq-ai/test-pipelines"
-commit = "3aeed94f733a99cac22f29a47578cd8ff88bf3ae"   # V0-TST-02 (#3): results store
+commit = "1e3ddb19c7611527f5e231ab63d4cda8c0f68781"   # main after #6 (V0-TST-04 failure records) and #5
