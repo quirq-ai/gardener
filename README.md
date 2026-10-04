@@ -64,7 +64,8 @@ The `tree-status` workflow runs it every 5 minutes and publishes `status/<repo>.
 when something changes, so that branch's log is the tree's open and close history (a quiet branch
 is not a stalled gardener: the workflow's run list shows each check). GitHub fires cron schedules
 best-effort, so each run on main dispatches the next one about 5 minutes later; the cron only
-restarts that chain if it stops. People, the
+restarts that chain if it stops. Setting the repo variable `QQ_TREE_STATUS_CHAIN` to `off` stops the
+chain without a code change. People, the
 gate in v1 and the gardener agent read that branch. release's `lkgr` advancer does not: it
 recomputes the verdicts itself by importing qqgarden at its own pinned commit.
 

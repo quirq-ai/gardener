@@ -248,12 +248,19 @@ jobs:
 
   next:
     # Keeps the 5-minute cadence a break needs to be reverted within 30 min: each run on main
-    # dispatches the next one. The concurrency group holds at most one pending run and cancels the
-    # older, so the push, cron and dispatch chains collapse into one; a cancelled run never chains.
+    # dispatches the next one, with no inputs, on refs/heads/main only. The concurrency group holds
+    # at most one pending run and cancels the older, so the push, cron, re-run and dispatch chains
+    # collapse into one; a cancelled run never chains, and the newer pending run carries it on. A
+    # failed or timed-out run still chains; a chain that stops anyway is restarted by the cron.
+    # Kill switch: repo variable QQ_TREE_STATUS_CHAIN=off (or disable the workflow).
+    # The delay: environment `tree-status-tick`'s wait timer when it has one (no runner held while
+    # waiting); otherwise this job sleeps the rest of 4.5 minutes after the run started.
+    # TODO(suraj): give `tree-status-tick` a 4-minute wait timer, deployments limited to main.
     needs: [tree-status, cycle]
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && vars.QQ_TREE_STATUS_CHAIN != 'off' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    environment: tree-status-tick
     permissions:
       actions: write            # dispatch this workflow, nothing else
     steps:
@@ -261,5 +268,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          sleep 240
-          gh workflow run tree-status.yml --repo "$GITHUB_REPOSITORY" --ref refs/heads/main
+          started=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .run_started_at)
+          left=$(( 270 - ($(date +%s) - $(date -d "$started" +%s)) ))
+          if [ "$left" -gt 0 ]; then sleep "$left"; fi
+          for try in 1 2 3; do
+            gh workflow run tree-status.yml --repo "$GITHUB_REPOSITORY" --ref refs/heads/main && exit 0
+            sleep $((try * 20))
+          done
+          echo "::error::could not dispatch the next run; the cron restarts the chain"; exit 1
