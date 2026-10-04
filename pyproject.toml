@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "The quirq infra (qq) gardener: keeps main green with tree status, bisection and capped reverts."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
 # jsonschema: qqcfg validate (infra-config's loader, imported from the pinned checkout).
 # qqresults: the results store and failure records, by pinned commit (pins.toml [test-pipelines]).
 dependencies = [
