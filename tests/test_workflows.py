@@ -48,13 +48,15 @@ def test_tokens_reach_only_the_steps_that_push():
 
 def test_each_run_on_main_dispatches_the_next():
     # GitHub's cron is best-effort; the chain keeps the 5-minute cadence (one pending run per group).
-    assert "group: tree-status" in WORKFLOW and "cancel-in-progress: false" in WORKFLOW
-    job = WORKFLOW.split("\n  next:\n", 1)[1]
+    assert "github.ref == 'refs/heads/main' && 'tree-status' ||" in WORKFLOW
+    assert "cancel-in-progress: false" in WORKFLOW
+    job = re.split(r"\n  [\w-]+:\n", WORKFLOW.split("\n  next:\n", 1)[1], maxsplit=1)[0]
     assert "if: ${{ !cancelled() && github.ref == 'refs/heads/main' && vars.QQ_TREE_STATUS_CHAIN != 'off' }}" in job
     assert "environment: tree-status-tick" in job and "needs: [tree-status, cycle]" in job
     assert " -f " not in job and "--field" not in job and "inputs." not in job   # nothing steers it
     assert re.search(r"permissions:\n      actions: write  ", job) and "contents:" not in job
     assert "gh workflow run tree-status.yml" in job and "--ref refs/heads/main" in job
+    assert "for try in 1 2 3" in job and "270 - " in job   # retried; delay counted from the run's start
 
 
 def test_an_empty_ledger_needs_a_person():

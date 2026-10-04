@@ -65,7 +65,8 @@ when something changes, so that branch's log is the tree's open and close histor
 is not a stalled gardener: the workflow's run list shows each check). GitHub fires cron schedules
 best-effort, so each run on main dispatches the next one about 5 minutes later; the cron only
 restarts that chain if it stops. Setting the repo variable `QQ_TREE_STATUS_CHAIN` to `off` stops the
-chain without a code change. People, the
+chain without a code change. Runs that a newer one replaced in the queue show as cancelled in the
+run list; that is expected. People, the
 gate in v1 and the gardener agent read that branch. release's `lkgr` advancer does not: it
 recomputes the verdicts itself by importing qqgarden at its own pinned commit.
 
