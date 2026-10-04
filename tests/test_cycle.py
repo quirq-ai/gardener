@@ -435,3 +435,22 @@ def test_a_refused_rerun_goes_to_a_person(cfg, tmp_path):
 def test_a_squashed_gardener_revert_is_still_recognised():
     assert cycle.GARDENER_REVERT.match("Revert 0123456789ab (qq gardener) (#45)")
     assert not cycle.GARDENER_REVERT.match("Revert 0123456789ab (qq gardener) and more")
+
+
+def test_cli_revert_refuses_a_doctored_ledger_worktree(config_root, tmp_path, capsys, monkeypatch):
+    """A local commit deleting reservations would survive the pull and empty the cap: refused."""
+    from forgerepo import g
+    xo = build(tmp_path)
+    culprit, parent = xo["commits"][1]["sha"], xo["commits"][2]["sha"]
+    led = shared_ledger(tmp_path)
+    monkeypatch.setattr(cli, "LEDGER_REMOTE", str(tmp_path / "ledger"))
+    g(led, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty",
+      "-m", "local only")
+    bj = tmp_path / "bisect.json"
+    bj.write_text(bisected(culprit, parent))
+    args = revert_args(config_root, snapshot(tmp_path, **{"xo-space": xo}), led, culprit,
+                       "--publish-ledger", "ledger", "--bisect-json", str(bj))
+    assert refused(args, capsys, "is not the published ledger branch")
+    (led / "stray").write_text("x")
+    assert refused(args, capsys, "uncommitted changes")
+    assert not (tmp_path / "forge").exists()

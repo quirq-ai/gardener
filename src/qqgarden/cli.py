@@ -261,6 +261,8 @@ def cmd_revert(args) -> int:
     if not args.dry_run:
         _check_shared_ledger(Path(args.ledger))
     ledger.refresh()
+    if not args.dry_run:
+        ledger.check_published()
     o = cycle.revert_culprit(cfg, repo, g, culprit, backend, ledger, policy, now, args.dry_run, verified=verified,
                              status=status, order={c.sha: i for i, c in enumerate(commits)})
     _report([o], args.json)

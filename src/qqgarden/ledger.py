@@ -100,6 +100,19 @@ class Ledger:
         if self.publish:
             git.run([*IDENTITY, "pull", "--quiet", "--rebase", "origin", self.publish], cwd=self.root)
 
+    def check_published(self) -> None:
+        """The worktree is exactly the published branch: no local commits or edits (a deleted
+        reservation, say) survive a pull to be counted, or pushed with the next record."""
+        if git.run(["status", "--porcelain"], cwd=self.root).stdout.strip():
+            raise GardenerError(f"{self.root} has uncommitted changes; the caps are counted on the "
+                                f"published {self.publish} branch only")
+        git.run(["fetch", "--quiet", "origin", self.publish], cwd=self.root)
+        head = git.run(["rev-parse", "HEAD"], cwd=self.root).stdout.strip()
+        published = git.run(["rev-parse", "FETCH_HEAD"], cwd=self.root).stdout.strip()
+        if head != published:
+            raise GardenerError(f"{self.root} is not the published {self.publish} branch (HEAD "
+                                f"{head[:12]}, {self.publish} {published[:12]}); reset it to the branch")
+
     def reserve(self, e: Entry, recheck=None) -> None:
         self._write_once(self.root / "reverts" / f"{e.id}.json", asdict(e), recheck)
 
