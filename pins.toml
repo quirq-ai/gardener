@@ -8,3 +8,7 @@ commit = "bf3ad29834d85489c49aa6d41ec3c7e59474b746"   # main after #11: backfill
 [test-pipelines]
 source = "https://github.com/quirq-ai/test-pipelines"
 commit = "ece61c0f1af4549e7da09f6b7ded3dcbc174f77c"   # main after the audit fixes (B1-B3, #17): store origin checks, public-only records
+
+[gate]
+source = "https://github.com/quirq-ai/gate"
+commit = "e718c70e1af337cd67d7e73d06f5d7e471bf7929"   # main after #16; its agnosticism guard (V0-GAT-02) runs in presubmit
