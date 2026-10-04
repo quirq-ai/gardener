@@ -23,6 +23,7 @@
 #
 # The ledger is the cap's memory, so a missing `ledger` branch is an error, never an empty ledger.
 # The first run starts it by hand: Actions > tree-status > Run workflow, with bootstrap-ledger.
+# The chain (`next`) replaces a queued manual run, so pause it first; see the README's ledger steps.
 # TODO(suraj): branch rulesets on `ledger` and `tree-status` (no deletion, no force push, updates
 # only by github-actions[bot]); asked of gate with the other org settings.
 name: tree-status
@@ -262,8 +263,9 @@ jobs:
     # waiting); otherwise this job sleeps the rest of 4.5 minutes after the run started. With the
     # timer the period is the run's own time plus 4 minutes (about 4.5 today). A flip of the kill
     # switch lets a `next` already waiting dispatch once more.
-    # TODO(suraj): give `tree-status-tick` a 4-minute wait timer, deployments limited to main, and
-    # nothing else: no required reviewers and no secrets (a reviewer gate would stop the chain).
+    # TODO(suraj), optional, post-v0: in Settings > Environments > tree-status-tick set a 4-minute
+    # wait timer and Deployment branches and tags > Selected branches and tags > main; nothing else
+    # (no required reviewers, no custom rules, no secrets: any gate there would stop the chain).
     needs: [tree-status, cycle]
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' && vars.QQ_TREE_STATUS_CHAIN != 'off' }}
     runs-on: ubuntu-24.04
@@ -276,10 +278,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # This attempt's start; if it cannot be read, dispatch without waiting rather than stop.
+          # This attempt's start; if it cannot be read, wait the full 4.5 minutes rather than stop or
+          # run back to back.
           started=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
                       --jq .run_started_at || true)
-          left=0
+          left=270
           if [ -n "$started" ]; then left=$(( 270 - ($(date +%s) - $(date -d "$started" +%s || date +%s)) )); fi
           if [ "$left" -gt 270 ]; then left=270; fi   # a skewed clock never outlasts the job's timeout
           if [ "$left" -gt 0 ]; then sleep "$left"; fi

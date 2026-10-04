@@ -53,11 +53,16 @@ def test_each_run_on_main_dispatches_the_next():
     job = re.split(r"\n  [\w-]+:\n", WORKFLOW.split("\n  next:\n", 1)[1], maxsplit=1)[0]
     assert "if: ${{ !cancelled() && github.ref == 'refs/heads/main' && vars.QQ_TREE_STATUS_CHAIN != 'off' }}" in job
     assert "environment: tree-status-tick" in job and "needs: [tree-status, cycle]" in job
-    assert " -f " not in job and "--field" not in job and "inputs." not in job   # nothing steers it
+    # nothing steers it: no inputs of any form, and only this job can dispatch
+    assert not re.search(r"\s(-f|-F|--field|--raw-field|--json)\b", job) and "inputs." not in job
+    assert len(re.findall(r"^ +actions: write", WORKFLOW, re.M)) == 1
+    # the cron stays as the backstop that restarts a stopped chain
+    assert re.search(r'^  schedule:\n(?:    #.*\n)*    - cron: "', WORKFLOW, re.M)
     assert re.search(r"permissions:\n      actions: write  ", job) and "contents:" not in job
     assert "gh workflow run tree-status.yml" in job and "--ref refs/heads/main" in job
     assert "for try in 1 2 3" in job and "270 - " in job   # retried; delay counted from the run's start
     assert "--jq .run_started_at || true" in job   # an unreadable start time never stops the chain
+    assert "left=270\n" in job                     # ...and never makes runs back to back
     # only runs on main write the tree-status and ledger branches
     assert WORKFLOW.count("    if: github.ref == 'refs/heads/main'\n    runs-on:") == 2
 
