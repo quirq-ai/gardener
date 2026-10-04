@@ -5,7 +5,7 @@ they form one group. A group also says what failed, because the revert caps diff
 type (auto_revert.toml [build_failure] and [test_failure]):
 
 - `build`: a step before the tests failed (a generated builder names each step after the
-  capability it runs: `fetch (...)`, `build (...)`, `test (...)`), or the run stored no results;
+  capability it runs: `fetch (...)`, `build (...)`, `test (...)`);
 - `test`: a `test (...)` step failed, or the stored verdict has unexpected tests;
 - `unknown`: neither could be told; the gardener never reverts an unknown failure.
 """

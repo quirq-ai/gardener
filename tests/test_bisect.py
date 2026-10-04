@@ -98,3 +98,20 @@ def test_cli_bisects_a_planted_break_to_its_commit(config_root, tmp_path, capsys
 def test_exit_125_is_unknown(tmp_path):
     shas = plant(tmp_path)
     assert CommandProbe(tmp_path / "repo", "exit 125")(shas["good"]) is Probe.UNKNOWN
+
+
+def test_timeout_kills_the_whole_probe(tmp_path):
+    import time
+    shas = plant(tmp_path)
+    marker = tmp_path / "still-running"
+    probe = CommandProbe(tmp_path / "repo", f"(sleep 3; touch {marker}) | cat", timeout_s=1)
+    assert probe(shas["good"]) is Probe.UNKNOWN
+    time.sleep(3.5)
+    assert not marker.exists()
+
+
+def test_good_must_be_an_ancestor(config_root, tmp_path, capsys):
+    shas = plant(tmp_path)
+    rc = cli.main(["bisect", "--config", str(config_root), "--repo-dir", str(tmp_path / "repo"),
+                   "--good", shas["bad"], "--bad", shas["good"], "--run", "./check.sh"])
+    assert rc == 2 and "not an ancestor" in capsys.readouterr().err

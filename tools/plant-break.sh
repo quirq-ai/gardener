@@ -5,6 +5,7 @@
 #   tools/plant-break.sh DIR [N=12] [BREAK=7]
 set -euo pipefail
 dir=$1; n=${2:-12}; brk=${3:-7}
+[ "$brk" -gt 1 ] && [ "$brk" -le "$n" ] || { echo "need 1 < BREAK <= N" >&2; exit 2; }
 rm -rf "$dir"; mkdir -p "$dir"; cd "$dir"
 git init -q -b main
 git config user.email gardener@example.invalid

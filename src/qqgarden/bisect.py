@@ -16,7 +16,9 @@ Probes:
 """
 from __future__ import annotations
 
+import os
 import shutil
+import signal
 import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
@@ -49,7 +51,8 @@ class Result:
 
 def bisect(suspects: Sequence[str], last_good: str, probe: Callable[[str], Probe],
            verify: bool) -> Result:
-    """`suspects` oldest first; the last one is known bad. `last_good` is known good ("" if none)."""
+    """`suspects` oldest first; the last one is known bad. `last_good` is known good ("" if none)
+    and is the first-parent parent of suspects[0]."""
     if not suspects:
         raise GardenerError("nothing to bisect: the regression range has no suspects")
     res = Result()
@@ -101,17 +104,24 @@ class CommandProbe:
         self.repo_dir = Path(repo_dir)
         self.command = command
         self.timeout_s = timeout_s
+        self.last_output = ""        # the tail of the last probe's output, for diagnosing a fail
 
     def __call__(self, commit: str) -> Probe:
         tmp = Path(tempfile.mkdtemp(prefix="qqgarden-probe-"))
         work = tmp / "w"
         try:
             git.run(["worktree", "add", "--quiet", "--detach", str(work), commit], cwd=self.repo_dir)
+            # Its own session, so a timeout can kill everything the command started, not just the shell.
+            p = subprocess.Popen(self.command, shell=True, cwd=work, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, start_new_session=True)
             try:
-                p = subprocess.run(self.command, shell=True, cwd=work, capture_output=True,
-                                   timeout=self.timeout_s)
+                out, _ = p.communicate(timeout=self.timeout_s)
             except subprocess.TimeoutExpired:
+                os.killpg(p.pid, signal.SIGKILL)
+                p.communicate()
+                self.last_output = f"timed out after {self.timeout_s} s"
                 return Probe.UNKNOWN
+            self.last_output = out.decode(errors="replace")[-2000:]
             return Probe.PASS if p.returncode == 0 else Probe.UNKNOWN if p.returncode == 125 else Probe.FAIL
         finally:
             git.run(["worktree", "remove", "--force", str(work)], cwd=self.repo_dir, check=False)

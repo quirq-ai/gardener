@@ -121,17 +121,24 @@ def cmd_bisect(args) -> int:
     cfg = config.load(Path(args.config))
     verify = cfg["auto_revert"]["policy"]["require_culprit_verification"]
     repo_dir = Path(args.repo_dir)
+    if git.run(["merge-base", "--is-ancestor", args.good, args.bad], cwd=repo_dir, check=False).returncode:
+        raise GardenerError(f"{args.good} is not an ancestor of {args.bad}; nothing to bisect between them")
     out = git.run(["rev-list", "--first-parent", "--reverse", f"{args.good}..{args.bad}"], cwd=repo_dir).stdout
     suspects = out.split()
     if not suspects:
         raise GardenerError(f"{args.good}..{args.bad} has no first-parent commits")
-    good = git.run(["rev-parse", args.good], cwd=repo_dir).stdout.strip()
-    res = bisect.bisect(suspects, good, bisect.CommandProbe(repo_dir, args.run, args.timeout), verify)
+    # Verify against the culprit's real first parent, which is `good` only when good is on the
+    # first-parent line.
+    good = git.run(["rev-parse", f"{suspects[0]}^1"], cwd=repo_dir).stdout.strip()
+    probe = bisect.CommandProbe(repo_dir, args.run, args.timeout)
+    res = bisect.bisect(suspects, good, probe, verify)
     if args.json:
         print(json.dumps(res.to_dict(), indent=2))
     else:
         for commit, answer in res.probes:
             print(f"probe {commit[:12]}: {answer}")
+        if not res.culprit and probe.last_output:
+            print("last probe output (tail):\n" + probe.last_output)
         print(res.reason)
     return 0 if res.culprit else 1
 
