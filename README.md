@@ -191,3 +191,7 @@ canary bisection (v1); agents holding the rotation (v2).
 ## Working here
 
 See [AGENTS.md](AGENTS.md). Run the checks with `python -m pytest`.
+
+## Licence
+
+Apache-2.0, see [LICENSE](LICENSE).
