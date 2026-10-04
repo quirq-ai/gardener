@@ -31,16 +31,33 @@ def latest_runs(runs: Iterable[BuilderRun]) -> dict[tuple[str, str], BuilderRun]
     A re-run replaces its first try, as GitHub shows it; a later run of the same commit (pushed
     again, or backfilled) replaces an older one, except that a cancelled run never hides an
     older verdict (a person may re-run a push run after its backfill was cancelled)."""
-    newest: dict[tuple[str, str], BuilderRun] = {}
-    verdict: dict[tuple[str, str], BuilderRun] = {}
-    order = lambda r: (_id_key(r.id), r.attempt)   # noqa: E731
+    pushed: dict[tuple[str, str], list[BuilderRun]] = {}
+    filled: dict[tuple[str, str], list[BuilderRun]] = {}
     for r in runs:
-        key = (r.builder, r.commit)
-        if key not in newest or order(r) > order(newest[key]):
-            newest[key] = r
-        if r.state in (RunState.GREEN, RunState.RED) and (key not in verdict or order(r) > order(verdict[key])):
-            verdict[key] = r
-    return {k: (verdict.get(k, r) if r.state is RunState.CANCELLED else r) for k, r in newest.items()}
+        # A dispatch that ran from the commit itself is that commit's own verdict (a push that
+        # skipped CI, say); any other backfill only fills a hole the push runs left.
+        own = not r.backfill or r.head_sha == r.commit
+        (pushed if own else filled).setdefault((r.builder, r.commit), []).append(r)
+    out = {}
+    for key in pushed.keys() | filled.keys():
+        run = _pick(pushed.get(key, []))
+        if run is None or run.state in (RunState.CANCELLED, RunState.MISSING):
+            run = _pick(filled.get(key, [])) or run
+        out[key] = run
+    return out
+
+
+def _pick(runs: list[BuilderRun]) -> BuilderRun | None:
+    """The newest run, except that a cancelled one never hides an older verdict."""
+    if not runs:
+        return None
+    order = lambda r: (_id_key(r.id), r.attempt)   # noqa: E731
+    newest = max(runs, key=order)
+    if newest.state is RunState.CANCELLED:
+        verdicts = [r for r in runs if r.state in (RunState.GREEN, RunState.RED)]
+        if verdicts:
+            return max(verdicts, key=order)
+    return newest
 
 
 def from_main(runs: Iterable[BuilderRun], commits: Sequence[Commit]) -> tuple[list[BuilderRun], int]:
@@ -66,7 +83,9 @@ def state_of(commit: Commit, builder: str, runs: dict[tuple[str, str], BuilderRu
     run = runs.get((builder, commit.sha))
     if run is not None:
         return run.state
-    return RunState.PENDING if now - parse_time(commit.landed_at) < grace else RunState.MISSING
+    landed = parse_time(commit.landed_at)
+    # A committer date in the future is not when it landed; it must not stay pending forever.
+    return RunState.PENDING if landed <= now and now - landed < grace else RunState.MISSING
 
 
 def observe(backend, repo, limit: int, now: datetime, grace: timedelta,
@@ -126,6 +145,8 @@ def tree_status(repo: str, branch: str, builders: Sequence[str], commits: Sequen
     return TreeStatus(repo=repo, branch=branch, head=head, state=state.value, reason=reason,
                       builders=statuses, red=red,
                       coverage=coverage(builders, commits, grid, latest, runs),
+                      green=next((c.sha for c in commits
+                                  if all(grid[(b, c.sha)] is RunState.GREEN for b in builders)), ""),
                       notes=notes)
 
 
@@ -150,7 +171,12 @@ def _red_span(builder: str, commits: Sequence[Commit], grid: dict, latest: dict)
     return RedSpan(builder=builder, first_bad=first_bad, latest_bad=latest_bad, last_good=last_good,
                    suspects=suspects, url=latest[(builder, first_bad)].url,
                    first_bad_attempt=latest[(builder, first_bad)].attempt,
-                   first_bad_backfill=latest[(builder, first_bad)].backfill)
+                   first_bad_backfill=latest[(builder, first_bad)].backfill
+                   and latest[(builder, first_bad)].head_sha != first_bad,
+                   first_bad_running=latest[(builder, first_bad)].running,
+                   **({"last_good_url": latest[(builder, last_good)].url,
+                       "last_good_attempt": latest[(builder, last_good)].attempt,
+                       "last_good_running": latest[(builder, last_good)].running} if last_good else {}))
 
 
 def coverage(builders: Sequence[str], commits: Sequence[Commit], grid: dict,

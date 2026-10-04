@@ -4,10 +4,14 @@ Builders that went red over the same range (last good .. first bad) share one cu
 they form one group. A group also says what failed, because the revert caps differ by failure
 type (auto_revert.toml [build_failure] and [test_failure]):
 
-- `build`: a step before the tests failed (a generated builder names each step after the
-  capability it runs: `fetch (...)`, `build (...)`, `test (...)`);
+- `build`: a `build (...)` step failed (a generated builder names each step after the capability
+  it runs: `fetch (...)`, `build (...)`, `test (...)`);
 - `test`: a `test (...)` step failed, or the stored verdict has unexpected tests;
-- `unknown`: neither could be told; the gardener never reverts an unknown failure.
+- `infra`: a `fetch (...)` step failed (a registry or network outage is not the commit's fault), or
+  any step that is not a capability failed (checkout, toolchain setup, the backfill check);
+- `unknown`: no failed step could be told.
+
+Only `build` and `test` failures are ever reverted; `infra` and `unknown` go to a person.
 """
 from __future__ import annotations
 
@@ -18,8 +22,9 @@ from typing import Any, Protocol
 from qqgarden.model import RedSpan, TreeStatus
 
 SCHEMA = "qq-failure-group/1"
-BUILD_CAPABILITIES = ("fetch", "build")
+BUILD_CAPABILITIES = ("build",)
 TEST_CAPABILITIES = ("test",)
+INFRA_CAPABILITIES = ("fetch",)
 
 
 @dataclass(frozen=True)
@@ -50,7 +55,9 @@ class Evidence(Protocol):
 
 
 def classify(failed_steps: list[str], tests: list[str] | None) -> str:
-    caps = {s.split(" (", 1)[0].strip().lower() for s in failed_steps}
+    caps = {s.split(" (", 1)[0].strip().lower() if s.rstrip().endswith(")") else "" for s in failed_steps}
+    if caps - set(BUILD_CAPABILITIES + TEST_CAPABILITIES):
+        return "infra"           # a fetch, or a step that is no capability: not the commit's code
     if caps & set(BUILD_CAPABILITIES):
         return "build"           # nothing after a broken build ran, so tests cannot be blamed
     if tests:
@@ -77,7 +84,7 @@ def group(status: TreeStatus, evidence: Evidence | None = None, store_classifies
             steps += [f"{s.builder}: {x}" for x in st]
             tests += ts or []
             kinds.append(classify(st, ts if store_classifies else None))
-        kind = "build" if "build" in kinds else "test" if "test" in kinds else "unknown"
+        kind = next((k for k in ("infra", "build", "test") if k in kinds), "unknown")
         out.append(Group(
             repo=status.repo, first_bad=first_bad, last_good=last_good,
             suspects=max((s.suspects for s in spans), key=len),

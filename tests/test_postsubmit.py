@@ -128,3 +128,48 @@ def test_a_later_run_of_the_same_commit_wins_over_an_older_rerun():
 def test_naive_time_is_utc():
     from qqgarden.postsubmit import parse_time
     assert parse_time("2026-10-04T12:00:00") == NOW
+
+
+def test_a_backfill_never_replaces_a_push_verdict():
+    """Audit S2: a green dispatch on a commit whose own push run was red does not open the tree."""
+    from dataclasses import replace
+    commits, runs = history("grg")
+    # commit 2's push run is red; a later dispatch from main's tip (commit 3) says it is green
+    runs.append(replace(runs[1], id="9000", conclusion="success", backfill=True, head_sha=sha(3)))
+    runs = [r for r in runs if r.commit != sha(3)]                     # commit 3 has no verdict yet
+    s = tree_status("demo", "main", [B], commits, runs, NOW, GRACE)
+    assert s.state == TreeState.CLOSED
+
+
+def test_a_dispatch_run_from_its_own_commit_is_its_verdict():
+    """A push that skipped CI leaves only a dispatch; run from the commit itself it is that
+    commit's own verdict, and a red one names a culprit like a push run would."""
+    from dataclasses import replace
+    commits, runs = history("gr")
+    runs[-1] = replace(runs[-1], backfill=True, head_sha=sha(2))
+    s = tree_status("demo", "main", [B], commits, runs, NOW, GRACE)
+    assert s.state == TreeState.CLOSED and not s.red[0].first_bad_backfill
+
+
+def test_rerunning_a_red_head_keeps_the_tree_closed():
+    """Audit S4: the verifying re-run of a red head must not open the tree while it runs."""
+    from qqgarden.model import BuilderRun
+    commits, runs = history("gr")
+    runs.append(BuilderRun(B, sha(2), "in_progress", "", "1001", 2, runs[-1].url, prior="failure"))
+    s = tree_status("demo", "main", [B], commits, runs, NOW, GRACE)
+    assert s.state == TreeState.CLOSED and s.red[0].first_bad_running
+
+
+def test_a_future_dated_commit_is_a_hole_not_pending_forever():
+    from dataclasses import replace
+    commits, runs = history("gg")
+    commits[0] = replace(commits[0], landed_at=(NOW + timedelta(days=30)).isoformat())
+    runs = [r for r in runs if r.commit != commits[0].sha]
+    s = tree_status("demo", "main", [B], commits, runs, NOW, GRACE)
+    assert f"{commits[0].sha} {B}" in s.coverage.missing
+
+
+def test_green_names_the_newest_all_green_commit():
+    assert status("ggrr").green == sha(2)
+    assert status("gggp").green == sha(3)
+    assert status("rr").green == ""

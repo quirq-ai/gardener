@@ -19,6 +19,7 @@ TODO(suraj): create the App and its secrets (see .github/workflows/tree-status.y
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 import os
 import urllib.error
@@ -46,6 +47,7 @@ class Backend:
         self.token = token if token is not None else os.environ.get("GITHUB_TOKEN", "")
         self.write_token = (write_token if write_token is not None
                             else os.environ.get("QQ_GARDENER_TOKEN", ""))
+        self._main: dict[str, dict[str, int]] = {}    # repo -> first-parent sha -> age (0 = tip)
 
     @property
     def forge(self) -> "Backend":
@@ -74,10 +76,38 @@ class Backend:
                     return [], (f"{workflow_file(builder)} is not in {repo.slug}: the post-submit "
                                 "workflow has not been delivered (infra-config `qqcfg deliver`)")
                 items = doc.get("workflow_runs", [])
-                out.extend(r for r in (_own_run(repo, builder, event, i) for i in items) if r)
+                out.extend(r for r in (_own_run(repo, builder, event, i) for i in items)
+                           if r and (not r.backfill or self._from_main(repo, r)))
                 if len(items) < 100:
                     break
-        return out, ""
+        return [self._with_prior(repo, r) for r in out], ""
+
+    def _from_main(self, repo: Repo, r: BuilderRun) -> bool:
+        """A backfill names its commit in its run-name, so it counts only when it ran from a main
+        commit at or after that commit. Checked here, so every reader of runs() gets it."""
+        if repo.name not in self._main:
+            dest = git.mirror(f"https://github.com/{repo.slug}.git", self.cache / repo.name,
+                              repo.default_branch)
+            self._main[repo.name] = {c.sha: i for i, c in
+                                     enumerate(git.first_parent(dest, repo.default_branch, 1000))}
+        age = self._main[repo.name]
+        return r.head_sha in age and r.commit in age and age[r.head_sha] <= age[r.commit]
+
+    def _with_prior(self, repo: Repo, r: BuilderRun) -> BuilderRun:
+        """A re-run in progress keeps its previous attempt's verdict (see BuilderRun.state)."""
+        if not r.running or r.attempt < 2:
+            return r
+        prev = self.attempts(repo, r.url, r.attempt - 1)
+        return dataclasses.replace(r, prior=prev[-1] if prev else "")
+
+    def attempts(self, repo: Repo, run_url: str, upto: int) -> list[str]:
+        """Each attempt's conclusion, 1..upto, oldest first ("" while one is running)."""
+        run_id = _run_id(run_url)
+        out = []
+        for n in range(1, upto + 1):
+            doc = self._get(f"/repos/{repo.slug}/actions/runs/{run_id}/attempts/{n}") if run_id else None
+            out.append((doc or {}).get("conclusion") or "")
+        return out
 
     def backfill(self, repo: Repo, builder: str, commit: str) -> None:
         """Run a builder's post-submit on a main commit that has none (infra-config's dispatch
@@ -90,8 +120,8 @@ class Backend:
 
     def failed_steps(self, repo: Repo, run_url: str) -> list[str]:
         """Names of the failed steps in a run's jobs, from its html_url (".../actions/runs/<id>")."""
-        run_id = run_url.rstrip("/").rsplit("/runs/", 1)[-1].split("/")[0]
-        if not run_id.isdigit():
+        run_id = _run_id(run_url)
+        if not run_id:
             return []
         doc = self._get(f"/repos/{repo.slug}/actions/runs/{run_id}/jobs?per_page=100") or {}
         return [s["name"] for j in doc.get("jobs", []) for s in j.get("steps", [])
@@ -147,14 +177,18 @@ class Backend:
                        {"assignees": assignees})
         return pr["html_url"]
 
-    def queue_land(self, repo: Repo, url: str) -> None:
-        """Enable auto-merge, which enters the merge queue once required checks pass."""
+    def queue_land(self, repo: Repo, url: str, head: str) -> None:
+        """Enable auto-merge, which enters the merge queue once required checks pass. Pinned to
+        the revert commit: anything pushed to the branch afterwards is never merged this way."""
         token = self._need_identity()
         number = url.rstrip("/").rsplit("/", 1)[-1]
         pr = self._send("GET", f"/repos/{repo.slug}/pulls/{number}", token)
+        if pr.get("head", {}).get("sha") != head:
+            raise GardenerError(f"{url}: its head is no longer the revert commit {head[:12]}; not landing it")
         self._send("POST", "/graphql", token, {
-            "query": "mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id}) "
-                     "{ clientMutationId } }", "variables": {"id": pr["node_id"]}})
+            "query": "mutation($id: ID!, $head: GitObjectID!) { enablePullRequestAutoMerge(input: "
+                     "{pullRequestId: $id, expectedHeadOid: $head}) { clientMutationId } }",
+            "variables": {"id": pr["node_id"], "head": head}})
 
     def commit_url(self, repo: Repo, sha: str) -> str:
         return f"https://github.com/{repo.slug}/commit/{sha}"
@@ -168,12 +202,14 @@ class Backend:
         sha = pr.get("merge_commit_sha") if pr.get("merged_at") else ""
         return self.commit_url(repo, sha) if sha else ""
 
-    def rerun(self, repo: Repo, run_url: str) -> bool:
+    def rerun(self, repo: Repo, run_url: str, failed_only: bool = True) -> bool:
+        """Re-run a red run's failed jobs (the culprit), or a whole green run (its parent)."""
         token = self._need_identity()
-        run_id = run_url.rstrip("/").rsplit("/runs/", 1)[-1].split("/")[0]
-        if not run_id.isdigit():
+        run_id = _run_id(run_url)
+        if not run_id:
             return False
-        self._send("POST", f"/repos/{repo.slug}/actions/runs/{run_id}/rerun-failed-jobs", token)
+        self._send("POST", f"/repos/{repo.slug}/actions/runs/{run_id}/"
+                   + ("rerun-failed-jobs" if failed_only else "rerun"), token)
         return True
 
     def _send(self, method: str, path: str, token: str, body: dict | None = None):
@@ -215,14 +251,19 @@ def _own_run(repo: Repo, builder: str, event: str, r: dict) -> BuilderRun | None
     if (r.get("event") != event or r.get("path", "").split("@")[0] != f".github/workflows/{workflow_file(builder)}"
             or (r.get("head_repository") or {}).get("full_name") != repo.slug):
         return None
-    if event == "push":
-        return _run(builder, r, r["head_sha"])
     if r.get("head_branch") != repo.default_branch:
         return None
+    if event == "push":
+        return _run(builder, r, r["head_sha"])
     name, _, commit = (r.get("display_title") or "").rpartition(" ")
     if name != builder or len(commit) != 40 or any(ch not in "0123456789abcdef" for ch in commit):
         return None
-    return _run(builder, r, commit, backfill=True)   # tree_status checks head_sha is on main
+    return _run(builder, r, commit, backfill=True)   # runs() checks head_sha is on main
+
+
+def _run_id(run_url: str) -> str:
+    run_id = run_url.rstrip("/").rsplit("/runs/", 1)[-1].split("/")[0]
+    return run_id if run_id.isdigit() else ""
 
 
 def _run(builder: str, r: dict, commit: str, backfill: bool = False) -> BuilderRun:

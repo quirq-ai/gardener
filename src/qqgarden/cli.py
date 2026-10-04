@@ -21,6 +21,7 @@ from qqgarden.model import TreeStatus
 # How long after a commit lands its post-submit run may take to show up before the commit counts as
 # missing a result. A run is listed as soon as it is queued, so this only absorbs event delivery lag.
 # TODO(expert): move to infra-config if it ever needs tuning per repo.
+LEDGER_BRANCH = "ledger"
 GRACE_MINUTES = 15
 
 
@@ -101,7 +102,9 @@ def cmd_groups(args) -> int:
     cfg = config.load(Path(args.config))
     backend = _backend(args, cfg)
     ev = Evidence(backend, {r.name: r for r in config.repos(cfg)}, Path(args.store) if args.store else None)
-    found = [g for s in statuses(args, cfg, backend) for g in groups.group(s, ev)]
+    # The results store can be written by any workflow run until test-pipelines checks where each
+    # record came from: it is shown, never used to tell the failure type.
+    found = [g for s in statuses(args, cfg, backend) for g in groups.group(s, ev, store_classifies=False)]
     if args.json:
         print(json.dumps([g.to_dict() for g in found], sort_keys=True, indent=2))
     else:
@@ -194,29 +197,51 @@ def cmd_cycle(args) -> int:
 
 
 def cmd_revert(args) -> int:
-    """Revert a culprit that bisection named (the gardener agent's path for longer ranges)."""
+    """Revert a culprit that bisection named (the gardener agent's path for longer ranges), under
+    exactly the cycle's rules: the culprit must be a suspect of a current red regression range,
+    the failure type comes from that range's own runs (never from the caller or the results store),
+    verification is the `qqgarden bisect --json` result for this culprit, and the caps are counted
+    on the shared, freshly pulled `ledger` branch."""
     from qqgarden import cycle
     from qqgarden.ledger import Ledger
     from qqgarden.policy import Policy
     cfg = config.load(Path(args.config))
     policy = Policy.from_config(cfg)
-    if policy.require_culprit_verification and not args.verified:
-        raise GardenerError("auto_revert.toml requires a verified culprit: pass --verified only after "
-                            "`qqgarden bisect` reported it verified")
+    if not args.dry_run and args.publish_ledger != LEDGER_BRANCH:
+        raise GardenerError(f"revert counts its caps on the shared ledger: pass --publish-ledger "
+                            f"{LEDGER_BRANCH} with --ledger a worktree of that branch (or --dry-run)")
     backend = _backend(args, cfg)
     if not args.repo or len(args.repo) != 1:
         raise GardenerError("revert needs exactly one --repo")
     [repo] = _repos(cfg, args.repo)
-    commits = {c.sha: c for c in backend.commits(repo, args.limit)}
-    culprit = next((c for sha, c in commits.items() if sha.startswith(args.culprit)), None)
+    now = postsubmit.parse_time(args.now) if args.now else datetime.now(timezone.utc)
+    status, commits = postsubmit.observe(backend, repo, args.limit, now, timedelta(minutes=args.grace_minutes))
+    culprit = next((c for c in commits if c.sha.startswith(args.culprit)), None)
     if culprit is None:
         raise GardenerError(f"{args.culprit} is not among the last {args.limit} commits on {repo.default_branch}")
-    g = groups.Group(repo=repo.name, first_bad=culprit.sha, last_good="", suspects=[culprit.sha],
-                     builders=["bisected"], kind=args.kind)
-    now = postsubmit.parse_time(args.now) if args.now else datetime.now(timezone.utc)
-    o = cycle.revert_culprit(cfg, repo, g, culprit, backend, Ledger(Path(args.ledger), args.publish_ledger),
-                             policy, now,
-                             args.dry_run, verified=True)
+    from qqgarden.evidence import Evidence
+    found = [g for g in groups.group(status, Evidence(backend, {repo.name: repo}), store_classifies=False)
+             if culprit.sha in g.suspects]
+    if not found:
+        raise GardenerError(f"{culprit.sha[:12]} is not a suspect of any red regression range on "
+                            f"{repo.default_branch}; only a commit inside a red range is reverted")
+    if len(found) > 1:
+        raise GardenerError(f"{culprit.sha[:12]} is a suspect of {len(found)} red ranges; a person decides")
+    [g] = found
+    verified = True
+    if policy.require_culprit_verification:
+        try:
+            res = json.loads(Path(args.bisect_json).read_text()) if args.bisect_json else {}
+        except (OSError, ValueError) as e:
+            raise GardenerError(f"--bisect-json: {e}") from None
+        verified = res.get("culprit") == culprit.sha and res.get("verified") is True
+        if not verified:
+            raise GardenerError("auto_revert.toml requires a verified culprit: pass --bisect-json with "
+                                f"the `qqgarden bisect --json` output that names {culprit.sha[:12]} verified")
+    ledger = Ledger(Path(args.ledger), args.publish_ledger)
+    ledger.refresh()
+    o = cycle.revert_culprit(cfg, repo, g, culprit, backend, ledger, policy, now, args.dry_run, verified=verified,
+                             status=status, order={c.sha: i for i, c in enumerate(commits)})
     _report([o], args.json)
     return 0 if o.step in ("proposed", "reverted", "dry-run") else 1
 
@@ -272,11 +297,11 @@ def main(argv: list[str] | None = None) -> int:
 
     r = sub.add_parser("revert", help="revert one bisected culprit within the caps (V0-GAR-03)")
     live(r)
-    r.add_argument("--ledger", required=True)
-    r.add_argument("--publish-ledger", default="", metavar="BRANCH")
+    r.add_argument("--ledger", required=True, help=f"a worktree of this repo's `{LEDGER_BRANCH}` branch")
+    r.add_argument("--publish-ledger", default="", metavar="BRANCH",
+                   help=f"must be `{LEDGER_BRANCH}` unless --dry-run")
     r.add_argument("--culprit", required=True)
-    r.add_argument("--kind", required=True, choices=["build", "test"])
-    r.add_argument("--verified", action="store_true", help="bisection verified the culprit")
+    r.add_argument("--bisect-json", help="`qqgarden bisect --json` output naming this culprit verified")
     r.add_argument("--forge-dir", help="snapshot backend: where the local forge keeps its PRs")
     r.add_argument("--dry-run", action="store_true")
     r.set_defaults(func=cmd_revert)

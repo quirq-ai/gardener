@@ -103,9 +103,12 @@ def test_github_reads_dispatched_runs_by_run_name(monkeypatch):
             {**own, "event": "workflow_dispatch", "id": 5, "display_title": "demo-postsubmit"},
         ]}
     monkeypatch.setattr(b, "_get", fake_get)
+    b._main["demo"] = {tip: 0, c: 1}                 # main's first-parent history: tip, then c
     runs, note = b.runs(REPO, "demo-postsubmit")
     assert note == ""
     assert [(r.id, r.commit, r.backfill) for r in runs] == [("1", c, True)]
+    b._main["demo"] = {c: 0}                         # the dispatch ran from a commit not on main
+    assert b.runs(REPO, "demo-postsubmit")[0] == []
 
 
 def test_github_backfill_dispatches_on_the_default_branch(monkeypatch):

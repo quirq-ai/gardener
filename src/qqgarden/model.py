@@ -66,12 +66,20 @@ class BuilderRun:
     finished_at: str = ""
     backfill: bool = False  # a dispatched run for a commit its push run skipped or lost
     head_sha: str = ""      # what a backfill ran from: its workflow file is that commit's
+    prior: str = ""         # the previous attempt's conclusion, while a re-run is in progress
 
     @property
     def state(self) -> RunState:
         if self.status != "completed":
-            return RunState.PENDING
+            # A re-run in progress keeps its last verdict: re-running a red (to verify a culprit)
+            # must not open the tree, nor re-running a green close it.
+            prior = CONCLUSIONS.get(self.prior)
+            return prior if prior in (RunState.GREEN, RunState.RED) else RunState.PENDING
         return CONCLUSIONS.get(self.conclusion, RunState.CANCELLED)
+
+    @property
+    def running(self) -> bool:
+        return self.status != "completed"
 
 
 @dataclass(frozen=True)
@@ -97,6 +105,10 @@ class RedSpan:
     url: str = ""            # the first red run
     first_bad_attempt: int = 1   # a re-run that is still red verifies the culprit (GAR-03)
     first_bad_backfill: bool = False  # the first red came from a backfill, run with a newer workflow
+    first_bad_running: bool = False   # its re-run is in progress
+    last_good_url: str = ""           # the last green run: its re-run must be green too (GAR-03)
+    last_good_attempt: int = 1
+    last_good_running: bool = False
 
 
 @dataclass(frozen=True)
@@ -126,6 +138,7 @@ class TreeStatus:
     red: list[RedSpan] = field(default_factory=list)
     coverage: Coverage = field(default_factory=Coverage)
     notes: list[str] = field(default_factory=list)
+    green: str = ""          # the newest commit every builder passed on ("" if none listed)
     schema: str = SCHEMA
 
     def to_dict(self) -> dict[str, Any]:
@@ -142,5 +155,5 @@ class TreeStatus:
             builders={k: BuilderStatus(**v) for k, v in d.get("builders", {}).items()},
             red=[RedSpan(**r) for r in d.get("red", [])],
             coverage=Coverage(**d.get("coverage", {})),
-            notes=list(d.get("notes", [])),
+            notes=list(d.get("notes", [])), green=d.get("green", ""),
         )

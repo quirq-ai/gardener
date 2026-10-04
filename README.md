@@ -30,11 +30,13 @@ infra-config generates a post-submit builder for each onboarded repo (`pipelines
 and those runs, and works out:
 
 - **a state per commit and builder**: green, red, pending (running, or landed under 15 minutes
-  ago), missing (no run), or cancelled (ended without a verdict). Only a real failure is red; a
-  re-run replaces its first attempt.
+  ago; a commit dated in the future is not pending, so it cannot hide), missing (no run), or
+  cancelled (ended without a verdict). Only a real failure is red; a re-run replaces its first
+  attempt, and while a re-run is in progress the commit keeps its last verdict, so re-running a
+  red head never opens the tree.
 - **the tree status per repo**: `closed` while any post-submit builder's newest verdict is red,
   `open` when all are green, `unknown` while a builder has no verdict yet. A missing signal is not
-  a healthy one.
+  a healthy one. `green` names the newest commit every builder passed on.
 - **red detection**: for each red builder, its regression range (last green .. first red) and the
   suspects in it, oldest first. V0-GAR-02 bisects these.
 - **coverage**: every main commit since the repo's first post-submit run must have a result (a repo with
@@ -44,7 +46,9 @@ and those runs, and works out:
   hole by dispatching that builder's workflow with the commit (infra-config's `commit` input),
   oldest first, with at most 10 in flight per repo. A dispatched run's head is the branch tip, so
   it is matched by its run-name, `<builder> <commit>`, and counts only when it ran from a `main`
-  commit at or after the one it names. A backfill runs main's newer workflow on the older commit,
+  commit at or after the one it names (checked in the backend, so every reader gets it). It only
+  fills a hole: a push run's verdict always wins over a backfill's, except that a dispatch run
+  from the commit itself is that commit's own verdict. A backfill runs main's newer workflow on the older commit,
   so a red backfill never names a culprit by itself: the cycle asks for a bisection. A hole whose
   backfill was cancelled too is left for a person, and re-running its push run clears it.
   Dispatching needs the bot identity.
@@ -55,10 +59,11 @@ qqgarden status --config ... --out status/ --require-coverage    # what the work
 qqgarden status --config ... --backend snapshot --snapshot tests/fixtures/every-commit.json
 ```
 
-The `tree-status` workflow runs it every 10 minutes and publishes `status/<repo>.json` (schema
+The `tree-status` workflow runs it every 5 minutes and publishes `status/<repo>.json` (schema
 `qq-tree-status/1`) and `status/README.md` to this repo's `tree-status` branch, committing only
-when something changes, so that branch's log is the tree's open and close history. Readers (the
-release `lkgr` advancer, the gate in v1, the gardener agent) read that branch.
+when something changes, so that branch's log is the tree's open and close history. People, the
+gate in v1 and the gardener agent read that branch. release's `lkgr` advancer does not: it
+recomputes the verdicts itself by importing qqgarden at its own pinned commit.
 
 ## Grouping and bisection (V0-GAR-02)
 
@@ -67,9 +72,11 @@ range (Sheriff-o-Matic's grouping): builders that went red over the same last-go
 range share one culprit search. Each group says what failed, because the revert caps differ by
 failure type:
 
-- `build` when a `fetch (...)` or `build (...)` step failed (generated builders name each step
-  after its capability), `test` when a `test (...)` step failed or the results store has unexpected
-  tests for that run, else `unknown`, which is never reverted;
+- `build` when a `build (...)` step failed (generated builders name each step after its
+  capability), `test` when a `test (...)` step failed, `infra` when anything else failed (a
+  `fetch (...)` step, the result sink, the runner), else `unknown`. `infra` and `unknown` are
+  never reverted. The results store's unexpected tests are shown, but never change the type until
+  test-pipelines checks where each record came from;
 - the failing tests, read from test-pipelines' results store (`--store`, a checkout of its
   `results` branch).
 
@@ -97,12 +104,20 @@ infra-config's generated post-submit accepts a commit input.
 failure group it finds a culprit, and reverts it if the caps allow:
 
 - **Culprit.** A range of one commit (its parent is green) names it. It must be verified
-  (`require_culprit_verification`): its own post-submit re-run is red again, for every builder
-  in the group (a later red commit proves nothing; it may be another break). Until then the
-  cycle asks for that re-run and waits. A group that errors, or a revert branch left without a
+  (`require_culprit_verification`) with and without it, for every builder in the group: the
+  culprit's own post-submit run is red on its last two attempts and was never green, and its
+  parent's is green on its last two and was never red. A later red commit proves nothing (it may
+  be another break). Until then the cycle re-runs the culprit's failed jobs and the parent's whole
+  run and waits; after 3 attempts without that, a person looks. A group that errors, or a revert branch left without a
   PR ("stuck", for a person), never stops the rest of the cycle. A longer range needs `qqgarden bisect`,
   which runs the repo's code, so the cycle leaves it to the gardener agent, which then runs
-  `qqgarden revert --culprit <sha> --kind build --verified`.
+  `qqgarden revert --culprit <sha> --bisect-json <bisect --json output> --ledger <ledger worktree>
+  --publish-ledger ledger`. That path keeps the cycle's rules: the culprit must be a suspect of a
+  red range now, the failure type comes from that range's runs, the bisection must name this
+  culprit verified, and the caps are counted on the freshly pulled shared ledger.
+- **After a revert.** Once a revert is on main and the group is still red on it or later, a
+  person looks ("still red after its revert"): another break may hide behind the first. The
+  gardener never reverts its own revert (`Revert <sha12> (qq gardener)`).
 - **Evidence.** Only GitHub's own data decides: this repo's `push` runs of the generated
   `qq-<builder>.yml` and their failed step names. Stored test verdicts are shown but never change
   a failure's type until test-pipelines checks where each record came from.
@@ -121,7 +136,14 @@ failure group it finds a culprit, and reverts it if the caps allow:
   pushed before its branch and PR exist, so a run that dies midway has still counted it. If
   another writer pushed first, the decision is re-made on the merged ledger before it counts. The cap
   counts the gardener's own records, never what a PR or commit claims about itself, and the
-  gardener only ever lands a PR it opened in the same run.
+  gardener only ever lands a PR it opened in the same run, at the revert commit it made
+  (auto-merge pinned to that head). A reservation that decided to land counts against
+  `submit_daily_limit` from the moment it is written, so two racing writers cannot both take the
+  last slot. A missing `ledger` branch stops the cycle; a person starts the first one with a manual
+  run and `bootstrap-ledger`. TODO(suraj): rulesets on `ledger` and `tree-status` (no deletion or
+  force push), asked of gate.
+- **Titles.** Revert PRs and commits are titled `Revert <sha12> (qq gardener)`; the culprit's own
+  title appears only as inline code in the body, so it cannot mention, link or close anything.
 - **Identity.** Revert PRs, re-runs and backfills use a short-lived installation token of the
   gardener's own GitHub App, "quirq gardener" (one App per tool, so no other tool's key can mint
   its permissions). It needs, on the onboarded repos only:
@@ -140,9 +162,16 @@ failure group it finds a culprit, and reverts it if the caps allow:
   that changed `.github/workflows/` cannot be reverted automatically (the push is refused).
 
 Presubmit shows both done-whens offline: a planted build break, red on its post-submit and on
-that run's re-run, is reverted and main is green again, 20 minutes after it landed; and with 10
-reverts in the ledger an 11th is refused. Live, the time to revert is the post-submit run, plus
-up to 5 minutes for the next cycle, plus the verifying re-run and the cycle after it.
+that run's re-run (with its parent green twice), is reverted and main is green again, 20 minutes
+after it landed; and with 10 reverts in the ledger an 11th is refused. The 30 minutes is offline
+only in v0: the test allows auto-landing for xo-space, while v0's `auto_land_repos` is empty, so
+live reverts are proposed and land when suraj merges them. With auto-landing, the time to revert
+is the post-submit run, plus up to 5 minutes for the next cycle, plus the verifying re-runs and
+the cycle after them.
+
+Next to its write tokens the workflow runs only this repo's code and qqresults from source at
+their pins, plus the hash-checked wheels in `requirements/runtime.lock`. No checkout keeps
+credentials; the job token reaches only the steps that push, scoped to this repo's URL.
 
 ## Failure record and postmortem stub per revert (V0-GAR-04)
 
@@ -181,9 +210,11 @@ TODO(suraj): file stubs in the affected repo instead, which needs the bot identi
 | V0-GAR-03 | Auto-revert within caps | #4 | merged |
 | V0-GAR-04 | Failure record and postmortem stub per revert | #5 | merged |
 
-Every item's done-when runs offline in presubmit. Live runs wait on: the redelivered post-submits
-with the backfill input (xo-space #215, innernet #40), the quirq gardener App, and
-`auto_land_repos` in auto_revert.toml before any revert lands.
+Every item's done-when runs offline in presubmit. The wave 4 audit's fixes (B1, B2, S1-S8) are in
+the audit-fixes PR. Live runs wait on: the redelivered post-submits with the backfill input
+(xo-space #215, innernet #40), the quirq gardener App, one manual run with `bootstrap-ledger`, and
+the `ledger`/`tree-status` rulesets. No revert lands on its own until a repo is listed in
+`auto_land_repos`.
 
 Out of scope for v0: test-failure reverts that land, revert precision, postmortem drafting and
 canary bisection (v1); agents holding the rotation (v2).

@@ -44,8 +44,10 @@ def build(tmp: Path, repo="xo-space", n=6, brk=5, step_min=10, red_after_break=T
                      "url": url})
         if red:
             steps[url] = ["build (demo)"]
-        if i == brk and rerun_red:   # the culprit's post-submit was re-run, and is red again
+        if i == brk and rerun_red:   # the culprit's post-submit was re-run, and is red again,
             runs.append({**runs[-1], "attempt": 2})
+            parent = next(r for r in runs if r["id"] == str(100 + i - 1))
+            runs.append({**parent, "attempt": 2})    # and its parent's, green again
     g(tmp, "clone", "-q", "--bare", str(work), str(remote))
     return {"commits": commits, "runs": runs, "failed_steps": steps, "remote": remote.name}
 

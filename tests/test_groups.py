@@ -20,11 +20,11 @@ class FakeEvidence:
 
 def test_classify():
     assert classify(["build (python-service)"], None) == "build"
-    assert classify(["fetch (pytest)"], None) == "build"
+    assert classify(["fetch (pytest)"], None) == "infra"
     assert classify(["test (pytest)"], None) == "test"
     assert classify([], ["a::b"]) == "test"
     assert classify(["build (x)"], ["a::b"]) == "build"
-    assert classify(["qq result sink"], None) == "unknown"
+    assert classify(["qq result sink"], None) == "infra"
     assert classify([], None) == "unknown"
 
 

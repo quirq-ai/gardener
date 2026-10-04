@@ -35,8 +35,26 @@ class Backend:
         return [Commit(**c) for c in self._repo(repo).get("commits", [])][:limit]
 
     def runs(self, repo: Repo, builder: str) -> tuple[list[BuilderRun], str]:
-        runs = [BuilderRun(**r) for r in self._repo(repo).get("runs", []) if r["builder"] == builder]
+        """Each run's attempts are separate entries with the same id; like GitHub, only the newest
+        attempt of a run is listed, with `prior` set while a re-run is in progress."""
+        mine = [r for r in self._repo(repo).get("runs", []) if r["builder"] == builder]
+        newest: dict[str, dict] = {}
+        for r in mine:
+            if r["id"] not in newest or r.get("attempt", 1) > newest[r["id"]].get("attempt", 1):
+                newest[r["id"]] = r
+        runs = []
+        for r in newest.values():
+            run = BuilderRun(**r)
+            if run.running and run.attempt > 1:
+                prev = self.attempts(repo, run.url, run.attempt - 1)
+                run = BuilderRun(**{**r, "prior": prev[-1] if prev else ""})
+            runs.append(run)
         return runs, "" if runs else f"the snapshot has no {builder} runs"
+
+    def attempts(self, repo: Repo, run_url: str, upto: int) -> list[str]:
+        by = {r.get("attempt", 1): r for r in self._repo(repo).get("runs", []) if r.get("url") == run_url}
+        return [(by.get(n, {}).get("conclusion") or "") if by.get(n, {}).get("status", "completed")
+                == "completed" else "" for n in range(1, upto + 1)]
 
     def failed_steps(self, repo: Repo, run_url: str) -> list[str]:
         return list(self._repo(repo).get("failed_steps", {}).get(run_url, []))

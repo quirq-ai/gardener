@@ -64,7 +64,7 @@ def test_proposed_revert_gets_its_fix_when_someone_lands_it(cfg, config_root, tm
     # A person merges the proposed revert; the next cycle links it as the fix, once.
     backend = load("snapshot", path=tmp_path / "snap.json", forge_dir=tmp_path / "forge")
     [repo] = [r for r in config.repos(cfg) if r.name == "xo-space"]
-    backend.forge.queue_land(repo, "local://xo-space/pull/1")
+    backend.forge.queue_land(repo, "local://xo-space/pull/1", "")
     steps = [o.step for o in go(NOW + timedelta(minutes=5))]
     assert "fix-linked" in steps
     assert failures.read(d).current.fix

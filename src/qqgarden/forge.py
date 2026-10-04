@@ -7,7 +7,7 @@
     branch_exists(repo, branch) -> bool
     push(workdir, repo, branch)              # push HEAD to that branch
     open_revert(repo, branch, base, title, body, assignees) -> str   # its URL
-    queue_land(repo, url)                    # land it through the gate (merge queue)
+    queue_land(repo, url, head)              # land it through the gate, only at this head
     rerun(repo, run_url) -> bool             # re-run a failed post-submit run, to verify a culprit
     commit_url(repo, sha) -> str
     landed(repo, url) -> str                 # the revert's commit URL once it is on the branch, else ""
