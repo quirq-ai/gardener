@@ -64,6 +64,7 @@ class BuilderRun:
     attempt: int = 1
     url: str = ""
     finished_at: str = ""
+    backfill: bool = False  # a dispatched run for a commit its push run skipped or lost
 
     @property
     def state(self) -> RunState:
@@ -104,6 +105,7 @@ class Coverage:
     missing: list[str] = field(default_factory=list)     # "<sha> <builder>"
     cancelled: list[str] = field(default_factory=list)
     pending: list[str] = field(default_factory=list)
+    retried: list[str] = field(default_factory=list)     # cancelled even when backfilled: for a person
 
     @property
     def complete(self) -> bool:

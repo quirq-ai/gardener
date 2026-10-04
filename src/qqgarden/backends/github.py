@@ -2,7 +2,10 @@
 
 infra-config delivers each post-submit builder as `.github/workflows/qq-<builder>.yml`, triggered by
 `push` to the default branch, with one job named after the builder. So the builder's runs on a
-commit are that workflow's `push` runs whose head is the commit.
+commit are that workflow's `push` runs whose head is the commit. A batched push runs only its
+newest commit; the gardener backfills the others by dispatching the workflow with a `commit`
+input. A dispatched run's head is the branch tip, so it is matched by its run-name,
+"<builder> <commit>", and only when it ran on the default branch.
 
 Reads need no token for public repos; GITHUB_TOKEN, when set, only raises the rate limit.
 
@@ -59,25 +62,28 @@ class Backend:
     # --- runs ---------------------------------------------------------------------------------
 
     def runs(self, repo: Repo, builder: str, pages: int = 3) -> tuple[list[BuilderRun], str]:
-        path = (f"/repos/{repo.slug}/actions/workflows/{workflow_file(builder)}/runs?"
-                + urllib.parse.urlencode({"branch": repo.default_branch, "event": "push",
-                                          "per_page": 100}))
         out: list[BuilderRun] = []
-        for page in range(1, pages + 1):
-            doc = self._get(f"{path}&page={page}")
-            if doc is None:
-                return [], (f"{workflow_file(builder)} is not in {repo.slug}: the post-submit workflow "
-                            "has not been delivered (infra-config `qqcfg deliver`)")
-            items = doc.get("workflow_runs", [])
-            # Only this repo's own push runs of the generated workflow count, so another workflow,
-            # a fork or a same-named file elsewhere cannot paint a builder red or green.
-            want = f".github/workflows/{workflow_file(builder)}"
-            out.extend(_run(builder, r) for r in items
-                       if r.get("event") == "push" and r.get("path", "").split("@")[0] == want
-                       and (r.get("head_repository") or {}).get("full_name") == repo.slug)
-            if len(items) < 100:
-                break
+        for event in ("push", "workflow_dispatch"):
+            path = (f"/repos/{repo.slug}/actions/workflows/{workflow_file(builder)}/runs?"
+                    + urllib.parse.urlencode({"branch": repo.default_branch, "event": event,
+                                              "per_page": 100}))
+            for page in range(1, pages + 1):
+                doc = self._get(f"{path}&page={page}")
+                if doc is None:
+                    return [], (f"{workflow_file(builder)} is not in {repo.slug}: the post-submit "
+                                "workflow has not been delivered (infra-config `qqcfg deliver`)")
+                items = doc.get("workflow_runs", [])
+                out.extend(r for r in (_own_run(repo, builder, event, i) for i in items) if r)
+                if len(items) < 100:
+                    break
         return out, ""
+
+    def backfill(self, repo: Repo, builder: str, commit: str) -> None:
+        """Run a builder's post-submit on a main commit that has none (infra-config's dispatch
+        input; the workflow itself refuses a commit that is not on the default branch)."""
+        token = self._need_identity()
+        self._send("POST", f"/repos/{repo.slug}/actions/workflows/{workflow_file(builder)}/dispatches",
+                   token, {"ref": repo.default_branch, "inputs": {"commit": commit}})
 
     # --- evidence -----------------------------------------------------------------------------
 
@@ -201,9 +207,25 @@ class Backend:
             raise GardenerError(f"GitHub API {path}: {e}") from None
 
 
-def _run(builder: str, r: dict) -> BuilderRun:
+def _own_run(repo: Repo, builder: str, event: str, r: dict) -> BuilderRun | None:
+    """Only this repo's own runs of the generated workflow on the default branch count, so another
+    workflow, a fork or a same-named file elsewhere cannot paint a builder red or green."""
+    if (r.get("event") != event or r.get("path", "").split("@")[0] != f".github/workflows/{workflow_file(builder)}"
+            or (r.get("head_repository") or {}).get("full_name") != repo.slug):
+        return None
+    if event == "push":
+        return _run(builder, r, r["head_sha"])
+    if r.get("head_branch") != repo.default_branch:
+        return None
+    name, _, commit = (r.get("display_title") or "").rpartition(" ")
+    if name != builder or len(commit) != 40 or any(ch not in "0123456789abcdef" for ch in commit):
+        return None
+    return _run(builder, r, commit, backfill=True)
+
+
+def _run(builder: str, r: dict, commit: str, backfill: bool = False) -> BuilderRun:
     return BuilderRun(
-        builder=builder, commit=r["head_sha"], status=r.get("status") or "",
+        builder=builder, commit=commit, backfill=backfill, status=r.get("status") or "",
         conclusion=r.get("conclusion") or "", id=str(r["id"]), attempt=int(r.get("run_attempt") or 1),
         url=r.get("html_url", ""),
         finished_at=r.get("updated_at", "") if r.get("status") == "completed" else "")

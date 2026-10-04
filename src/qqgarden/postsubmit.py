@@ -137,7 +137,7 @@ def coverage(builders: Sequence[str], commits: Sequence[Commit], grid: dict,
     if not ran:
         return Coverage()
     oldest = max(ran)
-    missing, cancelled, pending = [], [], []
+    missing, cancelled, pending, retried = [], [], [], []
     for c in commits[:oldest + 1]:
         for b in builders:
             s = grid[(b, c.sha)]
@@ -145,7 +145,9 @@ def coverage(builders: Sequence[str], commits: Sequence[Commit], grid: dict,
                 missing.append(f"{c.sha} {b}")
             elif s is RunState.CANCELLED:
                 cancelled.append(f"{c.sha} {b}")
+                if latest[(b, c.sha)].backfill:
+                    retried.append(f"{c.sha} {b}")
             elif s is RunState.PENDING:
                 pending.append(f"{c.sha} {b}")
     return Coverage(since=commits[oldest].sha, commits=oldest + 1, missing=missing,
-                    cancelled=cancelled, pending=pending)
+                    cancelled=cancelled, pending=pending, retried=retried)

@@ -40,6 +40,11 @@ and those runs, and works out:
 - **coverage**: every main commit since the repo's first post-submit run must have a result (a repo with
   no run yet is a warning: it is not onboarded). A
   missing or cancelled one is a hole a culprit can hide in, and fails the check.
+- **backfill**: a push of several commits runs only the newest, so the gardener's cycle fills each
+  hole by dispatching that builder's workflow with the commit (infra-config's `commit` input),
+  oldest first, at most 10 per repo per cycle. A dispatched run's head is the branch tip, so it is
+  matched by its run-name, `<builder> <commit>`, and only when it ran on `main`. A hole whose
+  backfill was cancelled too is left for a person. Dispatching needs the bot identity.
 
 ```sh
 qqgarden status --config <infra-config checkout>                 # live, github backend
@@ -155,10 +160,10 @@ TODO(suraj): file stubs in the affected repo instead, which needs the bot identi
 
 | Item | What | PR | State |
 |---|---|---|---|
-| V0-GAR-01 | Post-submit on every commit: red detection and tree status | #2 | merged |
+| V0-GAR-01 | Post-submit on every commit: red detection, tree status and backfill | #2, #6 | merged |
 | V0-GAR-02 | Group failures by regression range and bisect | #3 | merged |
 | V0-GAR-03 | Auto-revert within caps | #4 | merged |
-| V0-GAR-04 | Failure record and postmortem stub per revert | #5 | in review |
+| V0-GAR-04 | Failure record and postmortem stub per revert | #5 | merged |
 
 Every item's done-when runs offline in presubmit. Live runs wait on: post-submit delivery to
 xo-space and innernet (suraj merges xo-space #211 and innernet #37), the gardener's bot identity

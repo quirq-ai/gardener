@@ -3,6 +3,9 @@ group with a verified culprit, create a clean revert within the caps.
 
     observe (GAR-01) -> group (GAR-02) -> culprit -> decide (policy) -> revert -> ledger -> PR
 
+It also backfills coverage (GAR-01): a main commit that a batched push skipped, or whose run was
+cancelled, gets its post-submit dispatched, so every commit ends with a result.
+
 Which commit is the culprit:
 - a regression range of one commit (its parent has a green verdict) names it directly. It is
   verified once a re-run of that commit's post-submit is red again (a later red commit proves
@@ -35,7 +38,8 @@ class Outcome:
     repo: str
     group: str
     kind: str
-    step: str                  # reverted, proposed, refused, stuck, needs-bisect, awaiting-verification, dry-run, error
+    step: str                  # reverted, proposed, refused, stuck, needs-bisect, awaiting-verification,
+                               # backfilled, needs-person, dry-run, error
     reason: str
     culprit: str = ""
     revert: str = ""           # PR URL
@@ -81,6 +85,44 @@ def verified(spans: list[RedSpan]) -> bool:
     return bool(spans) and all(s.last_good and s.first_bad_attempt > 1 for s in spans)
 
 
+# TODO(expert): a config value; dispatches per repo per cycle, so a long batched history fills in
+# over a few cycles instead of flooding the runners.
+BACKFILL_PER_CYCLE = 10
+
+
+def backfill(repo: Repo, status: TreeStatus, commits: list[Commit], backend, dry_run: bool) -> list[Outcome]:
+    """Dispatch the post-submit for each hole in coverage, oldest first. A run cancelled again
+    after a backfill is left to a person, so nothing retries forever."""
+    cov = status.coverage
+    base = dict(repo=repo.name, group="coverage", kind="")
+    out = []
+    if cov.retried:
+        out.append(Outcome(**base, step="needs-person",
+                           reason="cancelled again after a backfill: " + ", ".join(cov.retried)))
+    holes = [h for h in cov.missing + cov.cancelled if h not in cov.retried]
+    if not holes:
+        return out
+    age = {c.sha: i for i, c in enumerate(commits)}   # newest first, so oldest has the largest index
+    holes = sorted(holes, key=lambda h: -age.get(h.split(" ", 1)[0], 0))[:BACKFILL_PER_CYCLE]
+    forge = backend.forge
+    problem = "dry run" if dry_run else ("no forge" if forge is None else forge.identity_problem())
+    if problem:
+        return out + [Outcome(**base, step="dry-run" if dry_run else "refused",
+                              reason=f"would backfill {len(holes)}: {problem}")]
+    done = []
+    for h in holes:
+        sha, builder = h.split(" ", 1)
+        try:
+            forge.backfill(repo, builder, sha)
+        except GardenerError as e:
+            out.append(Outcome(**base, step="error", reason=f"backfilling {h}: {e}"))
+            break
+        done.append(h)
+    if done:
+        out.append(Outcome(**base, step="backfilled", reason="dispatched " + ", ".join(done)))
+    return out
+
+
 def run(cfg: dict, repos: list[Repo], backend, ledger: Ledger, policy: Policy, now: datetime,
         grace: timedelta, limit: int, evidence=None, dry_run: bool = False,
         records=None) -> list[Outcome]:
@@ -90,6 +132,7 @@ def run(cfg: dict, repos: list[Repo], backend, ledger: Ledger, policy: Policy, n
     out: list[Outcome] = []
     for repo in repos:
         status, commits = postsubmit.observe(backend, repo, limit, now, grace)
+        out += backfill(repo, status, commits, backend, dry_run)
         out += handle_repo(cfg, repo, status, commits, backend, ledger, policy, now, evidence, dry_run)
     if records is not None and not dry_run:
         out += follow_up(repos, backend, ledger, records, now)

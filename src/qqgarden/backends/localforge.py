@@ -71,3 +71,9 @@ class LocalForge:
         on_main = git.run(["merge-base", "--is-ancestor", tip, f"refs/heads/{repo.default_branch}"],
                           cwd=remote, check=False).returncode == 0
         return self.commit_url(repo, tip) if on_main else ""
+
+    def backfill(self, repo, builder: str, commit: str) -> None:
+        d = self.dir / "dispatches"
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / f"{repo.name}.jsonl", "a") as f:
+            f.write(json.dumps({"builder": builder, "commit": commit}) + "\n")
