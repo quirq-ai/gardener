@@ -43,7 +43,16 @@ def test_qqresults_runs_at_the_pinned_commit():
 def test_tokens_reach_only_the_steps_that_push():
     names = [re.match(r"name: (.*)", s).group(1) for s in steps_using(WORKFLOW, "${{ github.token }}")]
     assert names == ["compute the tree status", "publish changes", "open the ledger branch",
-                     "garden (group, verify, revert within caps)"]
+                     "garden (group, verify, revert within caps)", "dispatch the next run"]
+
+
+def test_each_run_on_main_dispatches_the_next():
+    # GitHub's cron is best-effort; the chain keeps the 5-minute cadence (one pending run per group).
+    assert "group: tree-status" in WORKFLOW and "cancel-in-progress: false" in WORKFLOW
+    job = WORKFLOW.split("\n  next:\n", 1)[1]
+    assert "if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}" in job
+    assert re.search(r"permissions:\n      actions: write  ", job) and "contents:" not in job
+    assert "gh workflow run tree-status.yml" in job and "--ref refs/heads/main" in job
 
 
 def test_an_empty_ledger_needs_a_person():

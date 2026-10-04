@@ -28,7 +28,9 @@
 name: tree-status
 on:
   schedule:
-    - cron: "2-59/5 * * * *"    # every 5 min, off the hour: a break is reverted within 30 min
+    # GitHub fires schedules best-effort: on 2026-10-04 this cron ran twice in 7 hours. The `next`
+    # job below keeps the 5-minute cadence; the cron only restarts that chain if it stops.
+    - cron: "2-59/5 * * * *"
   workflow_dispatch:
     inputs:
       bootstrap-ledger:
@@ -243,3 +245,21 @@ jobs:
           python -m qqgarden.cli cycle --config .qq/infra-config --ledger .qq/ledger \
             --publish-ledger "${{ steps.ledger.outputs.publish }}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
+
+  next:
+    # Keeps the 5-minute cadence a break needs to be reverted within 30 min: each run on main
+    # dispatches the next one. The concurrency group holds at most one pending run and cancels the
+    # older, so the push, cron and dispatch chains collapse into one; a cancelled run never chains.
+    needs: [tree-status, cycle]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write            # dispatch this workflow, nothing else
+    steps:
+      - name: dispatch the next run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 240
+          gh workflow run tree-status.yml --repo "$GITHUB_REPOSITORY" --ref refs/heads/main
