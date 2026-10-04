@@ -83,13 +83,47 @@ names it, verified.
 TODO(expert): a probe that re-runs the repo's own post-submit builder on a commit, once
 infra-config's generated post-submit accepts a commit input.
 
+## Auto-revert within caps (V0-GAR-03)
+
+`qqgarden cycle` runs every 5 minutes (the `cycle` job of the `tree-status` workflow). For each
+failure group it finds a culprit, and reverts it if the caps allow:
+
+- **Culprit.** A range of one commit (its parent is green) names it. It must be verified
+  (`require_culprit_verification`): red again on a re-run or on a later commit. Until then the
+  cycle asks for a re-run of the failed run and waits. A longer range needs `qqgarden bisect`,
+  which runs the repo's code, so the cycle leaves it to the gardener agent, which then runs
+  `qqgarden revert --culprit <sha> --kind build --verified`.
+- **Caps**, all from infra-config's `auto_revert.toml` and none in code: at most `daily_cap` (10)
+  reverts created per rolling `window_hours` (24) across all repos and failure types, counting
+  every created revert, proposed or landed (suraj can change that default). Beneath it, per type,
+  `create_daily_limit`, `submit_daily_limit` and `max_culprit_age_hours`: build breaks land on
+  their own at most 4 a day and only for culprits under 6 h old; test failures are proposed only
+  (submit limit 0). An `unknown` failure is never reverted.
+- **Who may auto-land.** Only repos listed in `auto_land_repos` (asked of infra-config for
+  CFG-05). With none, every revert is proposed: in v0, xo-space and innernet reverts go to suraj
+  to merge.
+- **Clean only.** The revert is made in a scratch clone first; one that conflicts or changes
+  nothing is refused and not counted.
+- **Ledger.** Each revert is reserved in the `ledger` branch (write-once `reverts/<id>.json`),
+  pushed before its branch and PR exist, so a run that dies midway has still counted it. The cap
+  counts the gardener's own records, never what a PR or commit claims about itself, and the
+  gardener only ever lands a PR it opened in the same run.
+- **Identity.** Revert PRs are pushed and opened with `QQ_GARDENER_TOKEN`, a bot identity, because
+  a PR opened with a workflow's own `GITHUB_TOKEN` starts no workflows and would never be gated.
+  Without the secret the cycle reports what it would do and creates nothing.
+
+Presubmit shows both done-whens offline: a planted build break, red on its post-submit and the
+next commit's, is reverted and main is green again, 20 minutes after it landed; and with 10
+reverts in the ledger an 11th is refused. Live, the time to revert is the post-submit run, plus
+up to 5 minutes for the next cycle, plus a re-run when only one commit is red.
+
 ## v0 status
 
 | Item | What | PR | State |
 |---|---|---|---|
 | V0-GAR-01 | Post-submit on every commit: red detection and tree status | #2 | in review |
-| V0-GAR-02 | Group failures by regression range and bisect | #3 | in review |
-| V0-GAR-03 | Auto-revert within caps | | not started |
+| V0-GAR-02 | Group failures by regression range and bisect | #3 | merged |
+| V0-GAR-03 | Auto-revert within caps | #4 | in review |
 | V0-GAR-04 | Failure record and postmortem stub per revert | | not started |
 
 Out of scope for v0: test-failure reverts that land, revert precision, postmortem drafting and

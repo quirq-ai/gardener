@@ -93,6 +93,7 @@ class RedSpan:
     last_good: str = ""      # empty when no green verdict is in the listed window
     suspects: list[str] = field(default_factory=list)
     url: str = ""            # the first red run
+    first_bad_attempt: int = 1   # a re-run that is still red verifies the culprit (GAR-03)
 
 
 @dataclass(frozen=True)

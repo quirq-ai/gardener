@@ -4,10 +4,15 @@
 #   status/README.md    (the same as a table)
 # It commits only when a status changes, so the branch history is the tree's open/close log.
 # The job fails when a main commit since onboarding has no post-submit result (GAR-01 done-when).
+#
+# The `cycle` job then gardens (V0-GAR-03): it groups failures, and for each verified culprit makes
+# a clean revert within infra-config's auto_revert.toml caps, counted in the `ledger` branch. It
+# needs the bot identity secret QQ_GARDENER_TOKEN (TODO(suraj)); without it, it reports what it
+# would do and creates nothing. It runs no code from the repos it gardens, only `git revert`.
 name: tree-status
 on:
   schedule:
-    - cron: "4-59/10 * * * *"   # every 10 min, off the hour: GitHub delays on-the-hour schedules
+    - cron: "2-59/5 * * * *"    # every 5 min, off the hour: a break is reverted within 30 min
   workflow_dispatch:
   push:
     branches: [main]
@@ -77,3 +82,40 @@ jobs:
         run: |
           echo "::error::a main commit since onboarding has no post-submit result; see the summary"
           exit 1
+
+  cycle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write           # push to this repo's ledger branch only
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: read the infra-config pin
+        id: pin
+        run: python -c "import tomllib; print('commit=' + tomllib.load(open('pins.toml', 'rb'))['infra-config']['commit'])" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: quirq-ai/infra-config
+          ref: ${{ steps.pin.outputs.commit }}
+          path: .qq/infra-config
+          persist-credentials: false
+      - run: python -m pip install --quiet .
+      - name: open the ledger branch
+        run: |
+          if git fetch --depth 50 origin ledger; then
+            git worktree add -B ledger .qq/ledger FETCH_HEAD
+          else
+            git worktree add --orphan -b ledger .qq/ledger
+          fi
+      - name: garden (group, verify, revert within caps)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          QQ_GARDENER_TOKEN: ${{ secrets.QQ_GARDENER_TOKEN }}
+        run: |
+          set -o pipefail
+          qqgarden cycle --config .qq/infra-config --ledger .qq/ledger --publish-ledger ledger \
+            | tee -a "$GITHUB_STEP_SUMMARY"

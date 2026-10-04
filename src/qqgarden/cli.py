@@ -3,6 +3,8 @@
     qqgarden status --config <infra-config checkout> [--repo NAME]... [--out DIR] [--require-coverage]
     qqgarden groups --config <infra-config checkout> [--repo NAME]... [--store DIR]
     qqgarden bisect --config <infra-config checkout> --repo-dir DIR --good SHA --bad SHA --run CMD
+    qqgarden cycle  --config <infra-config checkout> --ledger DIR [--dry-run]
+    qqgarden revert --config <infra-config checkout> --ledger DIR --repo NAME --culprit SHA --kind build|test
 """
 from __future__ import annotations
 
@@ -26,7 +28,8 @@ def _backend(args, cfg: dict):
     name = args.backend or cfg.get("pipelines", {}).get("defaults", {}).get("backend", "")
     if not name:
         raise GardenerError("no backend: pass --backend or set pipelines.toml [defaults] backend")
-    return backends.load(name, path=args.snapshot, cache=args.cache)
+    return backends.load(name, path=args.snapshot, cache=args.cache,
+                         forge_dir=getattr(args, "forge_dir", None))
 
 
 def statuses(args, cfg: dict | None = None, backend=None) -> list[TreeStatus]:
@@ -44,15 +47,8 @@ def statuses(args, cfg: dict | None = None, backend=None) -> list[TreeStatus]:
     for repo in repos:
         notes = [f"{b}: config lets a newer commit cancel it (set cancel_in_progress = false)"
                  for b in repo.postsubmit if f"{repo.name}/{b}" in cancellable]
-        commits = backend.commits(repo, args.limit)
-        runs = []
-        for b in repo.postsubmit:
-            r, note = backend.runs(repo, b)
-            runs.extend(r)
-            if note:
-                notes.append(note)
-        out.append(postsubmit.tree_status(repo.name, repo.default_branch, repo.postsubmit, commits,
-                                          runs, now, timedelta(minutes=args.grace_minutes), notes))
+        out.append(postsubmit.observe(backend, repo, args.limit, now,
+                                      timedelta(minutes=args.grace_minutes), notes)[0])
     return out
 
 
@@ -143,6 +139,72 @@ def cmd_bisect(args) -> int:
     return 0 if res.culprit else 1
 
 
+def _repos(cfg: dict, names: list[str] | None):
+    repos = config.repos(cfg)
+    if names:
+        unknown = set(names) - {r.name for r in repos}
+        if unknown:
+            raise GardenerError(f"not onboarded in infra-config repos.toml: {', '.join(sorted(unknown))}")
+        repos = [r for r in repos if r.name in names]
+    return repos
+
+
+def _report(outcomes, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps([o.to_dict() for o in outcomes], sort_keys=True, indent=2))
+        return
+    if not outcomes:
+        print("nothing to do: no red post-submit builders")
+    for o in outcomes:
+        print(f"{o.repo}: {o.step}: {o.group} ({o.kind})" + (f" culprit {o.culprit[:12]}" if o.culprit else "")
+              + (f" -> {o.revert}" if o.revert else "") + f"\n    {o.reason}")
+
+
+def cmd_cycle(args) -> int:
+    from qqgarden import cycle
+    from qqgarden.evidence import Evidence
+    from qqgarden.ledger import Ledger
+    from qqgarden.policy import Policy
+    cfg = config.load(Path(args.config))
+    policy = Policy.from_config(cfg)
+    backend = _backend(args, cfg)
+    repos = _repos(cfg, args.repo)
+    ev = Evidence(backend, {r.name: r for r in config.repos(cfg)}, Path(args.store) if args.store else None)
+    now = postsubmit.parse_time(args.now) if args.now else datetime.now(timezone.utc)
+    outcomes = cycle.run(cfg, repos, backend, Ledger(Path(args.ledger), args.publish_ledger), policy, now,
+                         timedelta(minutes=args.grace_minutes), args.limit, ev, args.dry_run)
+    _report(outcomes, args.json)
+    return 0
+
+
+def cmd_revert(args) -> int:
+    """Revert a culprit that bisection named (the gardener agent's path for longer ranges)."""
+    from qqgarden import cycle
+    from qqgarden.ledger import Ledger
+    from qqgarden.policy import Policy
+    cfg = config.load(Path(args.config))
+    policy = Policy.from_config(cfg)
+    if policy.require_culprit_verification and not args.verified:
+        raise GardenerError("auto_revert.toml requires a verified culprit: pass --verified only after "
+                            "`qqgarden bisect` reported it verified")
+    backend = _backend(args, cfg)
+    if not args.repo or len(args.repo) != 1:
+        raise GardenerError("revert needs exactly one --repo")
+    [repo] = _repos(cfg, args.repo)
+    commits = {c.sha: c for c in backend.commits(repo, args.limit)}
+    culprit = next((c for sha, c in commits.items() if sha.startswith(args.culprit)), None)
+    if culprit is None:
+        raise GardenerError(f"{args.culprit} is not among the last {args.limit} commits on {repo.default_branch}")
+    g = groups.Group(repo=repo.name, first_bad=culprit.sha, last_good="", suspects=[culprit.sha],
+                     builders=["bisected"], kind=args.kind)
+    now = postsubmit.parse_time(args.now) if args.now else datetime.now(timezone.utc)
+    o = cycle.revert_culprit(cfg, repo, g, culprit, backend, Ledger(Path(args.ledger), args.publish_ledger),
+                             policy, now,
+                             args.dry_run, verified=True)
+    _report([o], args.json)
+    return 0 if o.step in ("proposed", "reverted", "dry-run") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="qqgarden", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -180,6 +242,27 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--timeout", type=int, default=1800, help="seconds per probe; a timeout is can't tell")
     b.add_argument("--json", action="store_true")
     b.set_defaults(func=cmd_bisect)
+
+    c = sub.add_parser("cycle", help="observe, group and revert verified culprits within the caps (V0-GAR-03)")
+    live(c)
+    c.add_argument("--ledger", required=True, help="the revert ledger (this repo's `ledger` branch)")
+    c.add_argument("--publish-ledger", default="", metavar="BRANCH",
+                   help="commit and push each ledger record to this branch before acting on it")
+    c.add_argument("--store", help="results store checkout, for failing tests")
+    c.add_argument("--forge-dir", help="snapshot backend: where the local forge keeps its PRs")
+    c.add_argument("--dry-run", action="store_true", help="decide and report; create nothing")
+    c.set_defaults(func=cmd_cycle)
+
+    r = sub.add_parser("revert", help="revert one bisected culprit within the caps (V0-GAR-03)")
+    live(r)
+    r.add_argument("--ledger", required=True)
+    r.add_argument("--publish-ledger", default="", metavar="BRANCH")
+    r.add_argument("--culprit", required=True)
+    r.add_argument("--kind", required=True, choices=["build", "test"])
+    r.add_argument("--verified", action="store_true", help="bisection verified the culprit")
+    r.add_argument("--forge-dir", help="snapshot backend: where the local forge keeps its PRs")
+    r.add_argument("--dry-run", action="store_true")
+    r.set_defaults(func=cmd_revert)
 
     args = p.parse_args(argv)
     try:

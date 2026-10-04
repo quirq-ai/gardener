@@ -5,6 +5,7 @@ brought in from a PR branch never ran post-submit on their own and are not suspe
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -12,8 +13,12 @@ from qqgarden.errors import GardenerError
 from qqgarden.model import Commit
 
 
-def run(args: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+def run(args: list[str], cwd: Path | None = None, check: bool = True,
+        env: dict | None = None) -> subprocess.CompletedProcess:
+    """`env` adds variables (such as GIT_CONFIG_* carrying a credential). Error messages show the
+    arguments, never `env`, so a credential must only ever travel in `env`."""
+    full = {**os.environ, **env} if env else None
+    p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=full)
     if check and p.returncode != 0:
         raise GardenerError(f"git {' '.join(args)} failed in {cwd or '.'}: {p.stderr.strip()}")
     return p
