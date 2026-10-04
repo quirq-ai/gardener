@@ -10,11 +10,11 @@ input. A dispatched run's head is the branch tip, so it is matched by its run-na
 Reads need no token for public repos; GITHUB_TOKEN, when set, only raises the rate limit.
 
 Writes (revert branches and PRs, landing, re-runs, backfills) use QQ_GARDENER_TOKEN: in the
-workflow, a short-lived installation token of the quirq infra bot (the GitHub App rollers and
-test-pipelines share) with contents, pull-requests and actions write on the onboarded repos. It
-cannot be the workflow's own GITHUB_TOKEN: a PR opened with that token starts no workflows, so the
-revert would never be gated. Without it the forge raises NoIdentity and the gardener only reports
-what it would do. TODO(suraj): create the App and its secrets QQ_BOT_CLIENT_ID, QQ_BOT_PRIVATE_KEY.
+workflow, a short-lived installation token of the gardener's own GitHub App ("quirq gardener")
+with contents, pull-requests and actions write on the onboarded repos. It cannot be the workflow's
+own GITHUB_TOKEN: a PR opened with that token starts no workflows, so the revert would never be
+gated. Without it the forge raises NoIdentity and the gardener only reports what it would do.
+TODO(suraj): create the App and its secrets (see .github/workflows/tree-status.yml).
 """
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ class Backend:
     # --- forge --------------------------------------------------------------------------------
 
     def identity_problem(self) -> str:
-        return "" if self.write_token else ("no bot identity: QQ_GARDENER_TOKEN (the quirq infra bot's "
+        return "" if self.write_token else ("no bot identity: QQ_GARDENER_TOKEN (the quirq gardener App's "
                                             "token) is not set, so the "
                                             "gardener cannot push a revert or open its PR")
 

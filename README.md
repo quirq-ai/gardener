@@ -123,13 +123,20 @@ failure group it finds a culprit, and reverts it if the caps allow:
   counts the gardener's own records, never what a PR or commit claims about itself, and the
   gardener only ever lands a PR it opened in the same run.
 - **Identity.** Revert PRs, re-runs and backfills use a short-lived installation token of the
-  quirq infra bot, the one GitHub App that rollers and test-pipelines share (secrets
-  `QQ_BOT_CLIENT_ID` and `QQ_BOT_PRIVATE_KEY`). The workflow mints it for exactly the repos
-  infra-config onboards, with contents, pull-requests and actions write, and passes it as
+  gardener's own GitHub App, "quirq gardener" (one App per tool, so no other tool's key can mint
+  its permissions). It needs, on the onboarded repos only:
+  - contents: write, to push revert branches;
+  - pull requests: write, to open revert PRs (and enable auto-merge once `auto_land_repos` allows);
+  - actions: write, to re-run a culprit's post-submit (verification) and dispatch backfills; read
+    is not enough for either;
+  - metadata: read (always granted).
+
+  The workflow mints the token for exactly the repos infra-config onboards and passes it as
   `QQ_GARDENER_TOKEN`. A PR opened with a workflow's own `GITHUB_TOKEN` starts no workflows and
   would never be gated. Without the App the cycle reports what it would do and creates nothing.
-  The secrets live in the `quirq-infra-bot` environment, limited to `main`, so a workflow on
-  another branch cannot mint the token. The token has no `workflows` permission, so a culprit
+  Its secrets, `QQ_GARDENER_APP_CLIENT_ID` and `QQ_GARDENER_APP_PRIVATE_KEY`, live in this repo's
+  `quirq-gardener` environment, limited to `main`, so a workflow on another branch cannot mint the
+  token. The token has no `workflows` permission, so a culprit
   that changed `.github/workflows/` cannot be reverted automatically (the push is refused).
 
 Presubmit shows both done-whens offline: a planted build break, red on its post-submit and on
@@ -175,7 +182,7 @@ TODO(suraj): file stubs in the affected repo instead, which needs the bot identi
 | V0-GAR-04 | Failure record and postmortem stub per revert | #5 | merged |
 
 Every item's done-when runs offline in presubmit. Live runs wait on: the redelivered post-submits
-with the backfill input (xo-space #215, innernet #40), the shared quirq infra bot App, and
+with the backfill input (xo-space #215, innernet #40), the quirq gardener App, and
 `auto_land_repos` in auto_revert.toml before any revert lands.
 
 Out of scope for v0: test-failure reverts that land, revert precision, postmortem drafting and

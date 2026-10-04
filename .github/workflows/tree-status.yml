@@ -7,11 +7,14 @@
 #
 # The `cycle` job then gardens (V0-GAR-03): it groups failures, and for each verified culprit makes
 # a clean revert within infra-config's auto_revert.toml caps, counted in the `ledger` branch. Its
-# writes (revert PRs, re-runs, backfill dispatches) use a short-lived token of the quirq infra bot,
-# the one GitHub App rollers and test-pipelines use too (secrets QQ_BOT_CLIENT_ID and
-# QQ_BOT_PRIVATE_KEY, TODO(suraj): store them in this repo's `quirq-infra-bot` environment, limited
-# to the main branch, so no other branch's workflow can mint the token); without it, it reports
-# what it would do and creates nothing. Install the App on a repo before infra-config onboards it.
+# writes (revert PRs, re-runs, backfill dispatches) use a short-lived token of the gardener's own
+# GitHub App, "quirq gardener". TODO(suraj): create it with repository permissions contents: write
+# (revert branches), pull requests: write (revert PRs), actions: write (re-run a culprit's
+# post-submit, dispatch backfills) and metadata: read, nothing else, installed on the onboarded
+# repos only; store its client id and private key as QQ_GARDENER_APP_CLIENT_ID and
+# QQ_GARDENER_APP_PRIVATE_KEY in this repo's `quirq-gardener` environment, limited to main. Install
+# it on a repo before infra-config onboards that repo. Without it the cycle reports what it would
+# do and creates nothing.
 # It runs no code from the repos it gardens, only `git revert`.
 name: tree-status
 on:
@@ -90,9 +93,9 @@ jobs:
   cycle:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    environment: quirq-infra-bot   # holds the bot's secrets; deployments limited to main
+    environment: quirq-gardener   # holds the App's secrets; deployments limited to main
     env:
-      HAS_BOT: ${{ secrets.QQ_BOT_CLIENT_ID != '' }}   # secrets are not readable in a step's `if`
+      HAS_BOT: ${{ secrets.QQ_GARDENER_APP_CLIENT_ID != '' }}   # secrets are not readable in a step's `if`
     permissions:
       contents: write           # push to this repo's ledger branch only
       actions: read
@@ -115,7 +118,7 @@ jobs:
       - name: onboarded repos
         id: repos
         run: |
-          # The bot token covers exactly the repos infra-config onboards in this org, nothing else.
+          # The App token covers exactly the repos infra-config onboards in this org, nothing else.
           python - <<'PY' >> "$GITHUB_OUTPUT"
           from pathlib import Path
           from qqgarden import config
@@ -132,8 +135,8 @@ jobs:
         if: env.HAS_BOT == 'true' && steps.repos.outputs.names != ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          client-id: ${{ secrets.QQ_BOT_CLIENT_ID }}
-          private-key: ${{ secrets.QQ_BOT_PRIVATE_KEY }}
+          client-id: ${{ secrets.QQ_GARDENER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.QQ_GARDENER_APP_PRIVATE_KEY }}
           owner: quirq-ai
           repositories: ${{ steps.repos.outputs.names }}
           permission-contents: write        # revert branches
@@ -155,7 +158,7 @@ jobs:
       - name: garden (group, verify, revert within caps)
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          QQ_GARDENER_TOKEN: ${{ steps.bot.outputs.token }}   # the bot's installation token
+          QQ_GARDENER_TOKEN: ${{ steps.bot.outputs.token }}   # the App's installation token
         run: |
           set -o pipefail
           qqgarden cycle --config .qq/infra-config --ledger .qq/ledger --publish-ledger ledger \
