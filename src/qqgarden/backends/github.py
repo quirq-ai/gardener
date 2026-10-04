@@ -111,8 +111,13 @@ class Backend:
         from qqgarden.revert import branch_name
         owner = repo.slug.split("/")[0]
         q = urllib.parse.urlencode({"head": f"{owner}:{branch_name(culprit)}", "state": "all"})
+        # Any PR from that branch blocks a second revert; only writers can make one, and the
+        # gardener's own record of what it opened is the ledger's links/, checked first.
         pulls = self._get(f"/repos/{repo.slug}/pulls?{q}") or []
         return pulls[0]["html_url"] if pulls else ""
+
+    def branch_exists(self, repo: Repo, branch: str) -> bool:
+        return self._get(f"/repos/{repo.slug}/branches/{urllib.parse.quote(branch, safe='')}") is not None
 
     def push(self, workdir: Path, repo: Repo, branch: str) -> None:
         self._need_identity()

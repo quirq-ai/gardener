@@ -3,7 +3,8 @@
     identity_problem() -> str                # "" when it can write, else why not
     clone_url(repo) -> str
     auth_env() -> dict                       # git credentials, carried only in env
-    existing_revert(repo, culprit) -> str    # the revert's PR or branch, or ""
+    existing_revert(repo, culprit) -> str    # an open or closed revert PR for the culprit, or ""
+    branch_exists(repo, branch) -> bool
     push(workdir, repo, branch)              # push HEAD to that branch
     open_revert(repo, branch, base, title, body, assignees) -> str   # its URL
     queue_land(repo, url)                    # land it through the gate (merge queue)

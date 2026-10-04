@@ -12,7 +12,8 @@ def g(cwd, *a):
     return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def build(tmp: Path, repo="xo-space", n=6, brk=5, step_min=10, red_after_break=True, conflict=False):
+def build(tmp: Path, repo="xo-space", n=6, brk=5, step_min=10, red_after_break=True, conflict=False,
+          rerun_red=True):
     """Commits 1..n land step_min apart, the newest `step_min` ago... the break at `brk` only touches
     `state`; other commits add their own file, so reverting the break is clean (unless `conflict`)."""
     work, remote = tmp / f"{repo}-work", tmp / f"{repo}.git"
@@ -43,6 +44,8 @@ def build(tmp: Path, repo="xo-space", n=6, brk=5, step_min=10, red_after_break=T
                      "url": url})
         if red:
             steps[url] = ["build (demo)"]
+        if i == brk and rerun_red:   # the culprit's post-submit was re-run, and is red again
+            runs.append({**runs[-1], "attempt": 2})
     g(tmp, "clone", "-q", "--bare", str(work), str(remote))
     return {"commits": commits, "runs": runs, "failed_steps": steps, "remote": remote.name}
 

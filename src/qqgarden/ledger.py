@@ -49,7 +49,7 @@ class Ledger:
         self.root = Path(root)
         self.publish = publish
 
-    def _write_once(self, path: Path, data: dict) -> None:
+    def _write_once(self, path: Path, data: dict, recheck=None) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         text = json.dumps(data, sort_keys=True, indent=2) + "\n"
         try:
@@ -58,9 +58,11 @@ class Ledger:
         except FileExistsError:
             raise GardenerError(f"{path} already exists; ledger records are write-once") from None
         if self.publish:
-            self._push(path)
+            self._push(path, recheck)
 
-    def _push(self, path: Path) -> None:
+    def _push(self, path: Path, recheck=None) -> None:
+        """`recheck` runs after pulling in another writer's records; a non-empty answer drops this
+        commit and raises, so the cap is judged on every record, not just ours."""
         rel = str(path.relative_to(self.root))
         git.run(["add", rel], cwd=self.root)
         git.run(["-c", "user.name=github-actions[bot]",
@@ -71,10 +73,14 @@ class Ledger:
                        check=False).returncode == 0:
                 return
             git.run(["pull", "--quiet", "--rebase", "origin", self.publish], cwd=self.root)
+            why = recheck() if recheck else ""
+            if why:
+                git.run(["reset", "--quiet", "--hard", "HEAD~1"], cwd=self.root)
+                raise GardenerError(f"another writer changed the ledger first; now refused: {why}")
         raise GardenerError(f"could not push {rel} to the {self.publish} branch; nothing was created")
 
-    def reserve(self, e: Entry) -> None:
-        self._write_once(self.root / "reverts" / f"{e.id}.json", asdict(e))
+    def reserve(self, e: Entry, recheck=None) -> None:
+        self._write_once(self.root / "reverts" / f"{e.id}.json", asdict(e), recheck)
 
     def mark_landed(self, rid: str, at: str) -> None:
         self._write_once(self.root / "landed" / f"{rid}.json", {"id": rid, "landed_at": at})
@@ -82,6 +88,14 @@ class Ledger:
     def set_revert(self, rid: str, revert: str) -> None:
         """Link the PR once it exists. A separate record, so `reverts/` stays write-once."""
         self._write_once(self.root / "links" / f"{rid}.json", {"id": rid, "revert": revert})
+
+    def revert_links(self) -> dict[str, str]:
+        d = self.root / "links"
+        out = {}
+        for p in sorted(d.glob("*.json")) if d.is_dir() else []:
+            data = json.loads(p.read_text())
+            out[data["id"]] = data["revert"]
+        return out
 
     def has(self, rid: str) -> bool:
         return (self.root / "reverts" / f"{rid}.json").is_file()
@@ -106,9 +120,9 @@ class Ledger:
         return {json.loads(p.read_text())["id"]: json.loads(p.read_text())["landed_at"]
                 for p in (sorted(d.glob("*.json")) if d.is_dir() else [])}
 
-    def counts(self, since: datetime) -> Counts:
+    def counts(self, since: datetime, exclude: str = "") -> Counts:
         from qqgarden.postsubmit import parse_time
-        entries = [e for e in self.entries() if parse_time(e.created_at) >= since]
+        entries = [e for e in self.entries() if parse_time(e.created_at) >= since and e.id != exclude]
         kinds: dict[str, int] = {}
         for e in entries:
             kinds[e.kind] = kinds.get(e.kind, 0) + 1

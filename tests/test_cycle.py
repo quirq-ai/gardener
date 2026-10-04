@@ -49,7 +49,7 @@ def test_v0_config_proposes_and_leaves_main_alone(cfg, tmp_path):
 
 
 def test_red_once_waits_for_verification(cfg, tmp_path):
-    xo = build(tmp_path, n=5, brk=5)
+    xo = build(tmp_path, n=5, brk=5, rerun_red=False)
     [o] = run_cycle(cfg, snapshot(tmp_path, **{"xo-space": xo}), tmp_path)
     assert o.step == "awaiting-verification"
     assert not (tmp_path / "ledger").exists()
@@ -109,3 +109,63 @@ def test_cli_revert_needs_verification(config_root, tmp_path, capsys):
     assert "verified" in capsys.readouterr().err
     assert cli.main(args + ["--verified"]) == 0
     assert "proposed" in capsys.readouterr().out
+
+
+def test_a_later_red_commit_does_not_verify_an_innocent_one(cfg, tmp_path):
+    """A flaky red on commit 5 and a real break on commit 6: 5 is not reverted on 6's evidence."""
+    cfg["auto_revert"]["policy"]["auto_land_repos"] = ["xo-space"]
+    xo = build(tmp_path, rerun_red=False)
+    [o] = run_cycle(cfg, snapshot(tmp_path, **{"xo-space": xo}), tmp_path)
+    assert o.step == "awaiting-verification"
+    assert not (tmp_path / "forge").exists()
+
+
+def test_a_revert_branch_without_a_pr_is_stuck_not_a_crash(cfg, tmp_path):
+    from forgerepo import g
+    xo = build(tmp_path)
+    culprit = xo["commits"][1]["sha"]
+    g(tmp_path / "xo-space.git", "branch", f"qq-gardener/revert-{culprit[:12]}", "main")
+    [o] = run_cycle(cfg, snapshot(tmp_path, **{"xo-space": xo}), tmp_path)
+    assert o.step == "stuck" and "a person must" in o.reason
+    assert Ledger(tmp_path / "ledger").counts(NOW - timedelta(hours=24)).created == 0
+
+
+def test_one_failing_group_does_not_stop_the_cycle(cfg, tmp_path, monkeypatch):
+    from qqgarden.errors import GardenerError
+    xo = build(tmp_path)
+
+    def boom(*a, **k):
+        raise GardenerError("forge said no")
+    monkeypatch.setattr(cycle, "revert_culprit", boom)
+    [o] = run_cycle(cfg, snapshot(tmp_path, **{"xo-space": xo}), tmp_path)
+    assert o.step == "error" and "forge said no" in o.reason
+
+
+def test_a_concurrent_writer_taking_the_last_slot_wins(cfg, tmp_path):
+    """Two writers each see 9 of 10; the second to push re-decides after pulling and backs out."""
+    import subprocess
+    from forgerepo import g
+    from qqgarden.errors import GardenerError
+    import pytest
+    cap = Policy.from_config(cfg).daily_cap
+    remote = tmp_path / "ledger.git"
+    g(tmp_path, "init", "-q", "--bare", "-b", "ledger", str(remote))
+    g(tmp_path, "clone", "-q", str(remote), "seed")
+    seed = Ledger(tmp_path / "seed", publish="ledger")
+    for i in range(cap - 1):
+        seed.reserve(Entry(id=f"s{i}", repo="innernet", culprit=f"{i:040x}", kind="test", action="propose",
+                           created_at="2026-10-04T11:00:00Z"))
+    g(tmp_path, "clone", "-q", "-b", "ledger", str(remote), "a")
+    g(tmp_path, "clone", "-q", "-b", "ledger", str(remote), "b")
+    a, b = Ledger(tmp_path / "a", publish="ledger"), Ledger(tmp_path / "b", publish="ledger")
+    since = NOW - timedelta(hours=24)
+
+    def recheck(ledger, rid):
+        return lambda: "" if ledger.counts(since, exclude=rid).created < cap else "daily cap reached"
+    a.reserve(Entry(id="ra", repo="xo-space", culprit="a" * 40, kind="build", action="propose",
+                    created_at="2026-10-04T11:30:00Z"), recheck=recheck(a, "ra"))
+    with pytest.raises(GardenerError, match="another writer"):
+        b.reserve(Entry(id="rb", repo="xo-space", culprit="b" * 40, kind="build", action="propose",
+                        created_at="2026-10-04T11:30:00Z"), recheck=recheck(b, "rb"))
+    names = g(remote, "ls-tree", "-r", "--name-only", "ledger")
+    assert "reverts/ra.json" in names and "reverts/rb.json" not in names

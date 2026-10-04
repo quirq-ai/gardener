@@ -89,8 +89,10 @@ infra-config's generated post-submit accepts a commit input.
 failure group it finds a culprit, and reverts it if the caps allow:
 
 - **Culprit.** A range of one commit (its parent is green) names it. It must be verified
-  (`require_culprit_verification`): red again on a re-run or on a later commit. Until then the
-  cycle asks for a re-run of the failed run and waits. A longer range needs `qqgarden bisect`,
+  (`require_culprit_verification`): its own post-submit re-run is red again, for every builder
+  in the group (a later red commit proves nothing; it may be another break). Until then the
+  cycle asks for that re-run and waits. A group that errors, or a revert branch left without a
+  PR ("stuck", for a person), never stops the rest of the cycle. A longer range needs `qqgarden bisect`,
   which runs the repo's code, so the cycle leaves it to the gardener agent, which then runs
   `qqgarden revert --culprit <sha> --kind build --verified`.
 - **Caps**, all from infra-config's `auto_revert.toml` and none in code: at most `daily_cap` (10)
@@ -105,17 +107,18 @@ failure group it finds a culprit, and reverts it if the caps allow:
 - **Clean only.** The revert is made in a scratch clone first; one that conflicts or changes
   nothing is refused and not counted.
 - **Ledger.** Each revert is reserved in the `ledger` branch (write-once `reverts/<id>.json`),
-  pushed before its branch and PR exist, so a run that dies midway has still counted it. The cap
+  pushed before its branch and PR exist, so a run that dies midway has still counted it. If
+  another writer pushed first, the decision is re-made on the merged ledger before it counts. The cap
   counts the gardener's own records, never what a PR or commit claims about itself, and the
   gardener only ever lands a PR it opened in the same run.
 - **Identity.** Revert PRs are pushed and opened with `QQ_GARDENER_TOKEN`, a bot identity, because
   a PR opened with a workflow's own `GITHUB_TOKEN` starts no workflows and would never be gated.
   Without the secret the cycle reports what it would do and creates nothing.
 
-Presubmit shows both done-whens offline: a planted build break, red on its post-submit and the
-next commit's, is reverted and main is green again, 20 minutes after it landed; and with 10
+Presubmit shows both done-whens offline: a planted build break, red on its post-submit and on
+that run's re-run, is reverted and main is green again, 20 minutes after it landed; and with 10
 reverts in the ledger an 11th is refused. Live, the time to revert is the post-submit run, plus
-up to 5 minutes for the next cycle, plus a re-run when only one commit is red.
+up to 5 minutes for the next cycle, plus the verifying re-run and the cycle after it.
 
 ## v0 status
 

@@ -27,9 +27,15 @@ class LocalForge:
         return {}
 
     def existing_revert(self, repo, culprit: str) -> str:
-        p = git.run(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch_name(culprit)}"],
-                    cwd=Path(self.remotes[repo.name]), check=False)
-        return branch_name(culprit) if p.returncode == 0 else ""
+        for p in sorted((self.dir / "prs").glob("*.json")) if (self.dir / "prs").is_dir() else []:
+            pr = json.loads(p.read_text())
+            if pr["repo"] == repo.name and pr["branch"] == branch_name(culprit):
+                return pr["url"]
+        return ""
+
+    def branch_exists(self, repo, branch: str) -> bool:
+        return git.run(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+                       cwd=Path(self.remotes[repo.name]), check=False).returncode == 0
 
     def push(self, workdir: Path, repo, branch: str) -> None:
         git.run(["push", "--quiet", "origin", f"HEAD:refs/heads/{branch}"], cwd=workdir)

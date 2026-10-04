@@ -106,10 +106,16 @@ jobs:
       - run: python -m pip install --quiet .
       - name: open the ledger branch
         run: |
-          if git fetch --depth 50 origin ledger; then
+          # Start an empty ledger only when the branch truly does not exist: an empty ledger on a
+          # fetch error would count zero reverts and let the cap be exceeded.
+          rc=0; git ls-remote --exit-code --heads origin ledger > /dev/null || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            git fetch --depth 50 origin ledger
             git worktree add -B ledger .qq/ledger FETCH_HEAD
-          else
+          elif [ "$rc" -eq 2 ]; then
             git worktree add --orphan -b ledger .qq/ledger
+          else
+            echo "::error::could not read the ledger branch (git ls-remote exit $rc)"; exit 1
           fi
       - name: garden (group, verify, revert within caps)
         env:
