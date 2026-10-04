@@ -97,7 +97,9 @@ def handle_repo(cfg, repo: Repo, status: TreeStatus, commits: list[Commit], back
                 policy: Policy, now: datetime, evidence, dry_run: bool) -> list[Outcome]:
     out = []
     by_sha = {c.sha: c for c in commits}
-    for g in groups_mod.group(status, evidence):
+    # Reverts act on GitHub's own run and step data only. TODO(expert): let stored verdicts classify
+    # once test-pipelines checks each record's origin; today any workflow run can write one.
+    for g in groups_mod.group(status, evidence, store_classifies=False):
         base = dict(repo=repo.name, group=g.key, kind=g.kind, runs=g.runs)
         try:
             out.append(handle_group(cfg, repo, g, status, by_sha, backend, ledger, policy, now, dry_run))

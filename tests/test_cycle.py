@@ -48,6 +48,25 @@ def test_v0_config_proposes_and_leaves_main_alone(cfg, tmp_path):
     assert o.revert == "local://xo-space/pull/1"
 
 
+def test_store_records_alone_never_make_a_failure_revertable(cfg, tmp_path):
+    """Any workflow run can write the results store today, so a stored unexpected test must not
+    turn a failure GitHub cannot explain into a revert."""
+    from qqgarden.evidence import Evidence
+    xo = build(tmp_path)
+    xo["failed_steps"] = {}                      # GitHub names no failed step
+    backend = load("snapshot", path=snapshot(tmp_path, **{"xo-space": xo}), forge_dir=tmp_path / "forge")
+    repos = [r for r in config.repos(cfg) if r.name == "xo-space"]
+
+    class Forged(Evidence):
+        def unexpected_tests(self, repo, builder, commit):
+            return ["planted::test"]
+    ev = Forged(backend, {r.name: r for r in repos})
+    [o] = cycle.run(cfg, repos, backend, Ledger(tmp_path / "ledger"), Policy.from_config(cfg), NOW,
+                    timedelta(minutes=15), 100, evidence=ev)
+    assert o.kind == "unknown" and o.step != "proposed" and o.revert == ""
+    assert not (tmp_path / "ledger").exists()
+
+
 def test_red_once_waits_for_verification(cfg, tmp_path):
     xo = build(tmp_path, n=5, brk=5, rerun_red=False)
     [o] = run_cycle(cfg, snapshot(tmp_path, **{"xo-space": xo}), tmp_path)

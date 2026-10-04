@@ -60,7 +60,9 @@ def classify(failed_steps: list[str], tests: list[str] | None) -> str:
     return "unknown"
 
 
-def group(status: TreeStatus, evidence: Evidence | None = None) -> list[Group]:
+def group(status: TreeStatus, evidence: Evidence | None = None, store_classifies: bool = True) -> list[Group]:
+    """With store_classifies=False the stored tests are reported but never change the kind, so a
+    record in the results store alone cannot make a failure revertable."""
     by_range: dict[tuple[str, str], list[RedSpan]] = {}
     for span in status.red:
         by_range.setdefault((span.last_good, span.first_bad), []).append(span)
@@ -74,7 +76,7 @@ def group(status: TreeStatus, evidence: Evidence | None = None) -> list[Group]:
             ts = evidence.unexpected_tests(status.repo, s.builder, s.first_bad) if evidence else None
             steps += [f"{s.builder}: {x}" for x in st]
             tests += ts or []
-            kinds.append(classify(st, ts))
+            kinds.append(classify(st, ts if store_classifies else None))
         kind = "build" if "build" in kinds else "test" if "test" in kinds else "unknown"
         out.append(Group(
             repo=status.repo, first_bad=first_bad, last_good=last_good,

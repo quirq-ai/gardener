@@ -22,11 +22,20 @@ def test_github_runs_parse(monkeypatch):
 
     def fake_get(path):
         seen.append(path)
+        own = {"event": "push", "path": ".github/workflows/qq-demo-postsubmit.yml",
+               "head_repository": {"full_name": "quirq-ai/demo"}}
         return {"workflow_runs": [
-            {"id": 7, "head_sha": "a" * 40, "status": "completed", "conclusion": "failure",
+            {**own, "id": 7, "head_sha": "a" * 40, "status": "completed", "conclusion": "failure",
              "run_attempt": 2, "html_url": "https://github.com/x/runs/7", "updated_at": "2026-10-04T10:00:00Z"},
-            {"id": 8, "head_sha": "b" * 40, "status": "in_progress", "conclusion": None,
+            {**own, "id": 8, "head_sha": "b" * 40, "status": "in_progress", "conclusion": None,
              "html_url": "https://github.com/x/runs/8", "updated_at": "2026-10-04T10:01:00Z"},
+            # none of these is the builder: a fork, another event, another workflow file
+            {**own, "id": 9, "head_sha": "c" * 40, "status": "completed", "conclusion": "failure",
+             "head_repository": {"full_name": "someone/demo"}},
+            {**own, "id": 10, "head_sha": "c" * 40, "status": "completed", "conclusion": "failure",
+             "event": "pull_request"},
+            {**own, "id": 11, "head_sha": "c" * 40, "status": "completed", "conclusion": "failure",
+             "path": ".github/workflows/other.yml"},
         ]}
     monkeypatch.setattr(b, "_get", fake_get)
     runs, note = b.runs(REPO, "demo-postsubmit")

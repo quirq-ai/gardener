@@ -69,7 +69,12 @@ class Backend:
                 return [], (f"{workflow_file(builder)} is not in {repo.slug}: the post-submit workflow "
                             "has not been delivered (infra-config `qqcfg deliver`)")
             items = doc.get("workflow_runs", [])
-            out.extend(_run(builder, r) for r in items)
+            # Only this repo's own push runs of the generated workflow count, so another workflow,
+            # a fork or a same-named file elsewhere cannot paint a builder red or green.
+            want = f".github/workflows/{workflow_file(builder)}"
+            out.extend(_run(builder, r) for r in items
+                       if r.get("event") == "push" and r.get("path", "").split("@")[0] == want
+                       and (r.get("head_repository") or {}).get("full_name") == repo.slug)
             if len(items) < 100:
                 break
         return out, ""
