@@ -59,6 +59,17 @@ class Backend:
                 break
         return out, ""
 
+    # --- evidence -----------------------------------------------------------------------------
+
+    def failed_steps(self, repo: Repo, run_url: str) -> list[str]:
+        """Names of the failed steps in a run's jobs, from its html_url (".../actions/runs/<id>")."""
+        run_id = run_url.rstrip("/").rsplit("/runs/", 1)[-1].split("/")[0]
+        if not run_id.isdigit():
+            return []
+        doc = self._get(f"/repos/{repo.slug}/actions/runs/{run_id}/jobs?per_page=100") or {}
+        return [s["name"] for j in doc.get("jobs", []) for s in j.get("steps", [])
+                if s.get("conclusion") in ("failure", "timed_out")]
+
     def _get(self, path: str) -> dict | None:
         req = urllib.request.Request(API + path, headers={
             "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",

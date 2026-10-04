@@ -29,3 +29,6 @@ class Backend:
     def runs(self, repo: Repo, builder: str) -> tuple[list[BuilderRun], str]:
         runs = [BuilderRun(**r) for r in self._repo(repo).get("runs", []) if r["builder"] == builder]
         return runs, "" if runs else f"the snapshot has no {builder} runs"
+
+    def failed_steps(self, repo: Repo, run_url: str) -> list[str]:
+        return list(self._repo(repo).get("failed_steps", {}).get(run_url, []))

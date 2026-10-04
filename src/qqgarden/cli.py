@@ -1,6 +1,8 @@
 """qqgarden: the gardener's command line.
 
     qqgarden status --config <infra-config checkout> [--repo NAME]... [--out DIR] [--require-coverage]
+    qqgarden groups --config <infra-config checkout> [--repo NAME]... [--store DIR]
+    qqgarden bisect --config <infra-config checkout> --repo-dir DIR --good SHA --bad SHA --run CMD
 """
 from __future__ import annotations
 
@@ -10,7 +12,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from qqgarden import backends, config, postsubmit
+from qqgarden import backends, bisect, config, git, groups, postsubmit
 from qqgarden.errors import GardenerError
 from qqgarden.model import TreeStatus
 
@@ -27,8 +29,8 @@ def _backend(args, cfg: dict):
     return backends.load(name, path=args.snapshot, cache=args.cache)
 
 
-def statuses(args) -> list[TreeStatus]:
-    cfg = config.load(Path(args.config))
+def statuses(args, cfg: dict | None = None, backend=None) -> list[TreeStatus]:
+    cfg = cfg or config.load(Path(args.config))
     repos = config.repos(cfg)
     if args.repo:
         unknown = set(args.repo) - {r.name for r in repos}
@@ -36,7 +38,7 @@ def statuses(args) -> list[TreeStatus]:
             raise GardenerError(f"not onboarded in infra-config repos.toml: {', '.join(sorted(unknown))}")
         repos = [r for r in repos if r.name in args.repo]
     cancellable = set(config.cancellable(cfg))
-    backend = _backend(args, cfg)
+    backend = backend or _backend(args, cfg)
     now = postsubmit.parse_time(args.now) if args.now else datetime.now(timezone.utc)
     out = []
     for repo in repos:
@@ -98,25 +100,79 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_groups(args) -> int:
+    from qqgarden.evidence import Evidence
+    cfg = config.load(Path(args.config))
+    backend = _backend(args, cfg)
+    ev = Evidence(backend, {r.name: r for r in config.repos(cfg)}, Path(args.store) if args.store else None)
+    found = [g for s in statuses(args, cfg, backend) for g in groups.group(s, ev)]
+    if args.json:
+        print(json.dumps([g.to_dict() for g in found], sort_keys=True, indent=2))
+    else:
+        for g in found:
+            print(f"{g.key}  {g.kind}  builders={','.join(g.builders)}  suspects={len(g.suspects)}"
+                  + (f"  tests={len(g.tests)}" if g.tests else ""))
+        if not found:
+            print("no red post-submit builders")
+    return 0
+
+
+def cmd_bisect(args) -> int:
+    cfg = config.load(Path(args.config))
+    verify = cfg["auto_revert"]["policy"]["require_culprit_verification"]
+    repo_dir = Path(args.repo_dir)
+    out = git.run(["rev-list", "--first-parent", "--reverse", f"{args.good}..{args.bad}"], cwd=repo_dir).stdout
+    suspects = out.split()
+    if not suspects:
+        raise GardenerError(f"{args.good}..{args.bad} has no first-parent commits")
+    good = git.run(["rev-parse", args.good], cwd=repo_dir).stdout.strip()
+    res = bisect.bisect(suspects, good, bisect.CommandProbe(repo_dir, args.run, args.timeout), verify)
+    if args.json:
+        print(json.dumps(res.to_dict(), indent=2))
+    else:
+        for commit, answer in res.probes:
+            print(f"probe {commit[:12]}: {answer}")
+        print(res.reason)
+    return 0 if res.culprit else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="qqgarden", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    def live(sp):
+        sp.add_argument("--config", required=True, help="infra-config checkout at the pins.toml commit")
+        sp.add_argument("--repo", action="append", help="limit to these onboarded repos")
+        sp.add_argument("--backend", help="override pipelines.toml [defaults] backend (e.g. snapshot)")
+        sp.add_argument("--snapshot", help="snapshot JSON for the snapshot backend")
+        sp.add_argument("--cache", default=".qq/git", help="where the github backend keeps its clones")
+        sp.add_argument("--limit", type=int, default=100, help="main commits to check, newest first")
+        sp.add_argument("--grace-minutes", type=int, default=GRACE_MINUTES)
+        sp.add_argument("--now", help="RFC 3339 time to evaluate at (tests and replays)")
+        sp.add_argument("--json", action="store_true")
+
     s = sub.add_parser("status", help="tree status, red detection and post-submit coverage (V0-GAR-01)")
-    s.add_argument("--config", required=True, help="infra-config checkout at the pins.toml commit")
-    s.add_argument("--repo", action="append", help="limit to these onboarded repos")
-    s.add_argument("--backend", help="override pipelines.toml [defaults] backend (e.g. snapshot)")
-    s.add_argument("--snapshot", help="snapshot JSON for the snapshot backend")
-    s.add_argument("--cache", default=".qq/git", help="where the github backend keeps its clones")
-    s.add_argument("--limit", type=int, default=100, help="main commits to check, newest first")
-    s.add_argument("--grace-minutes", type=int, default=GRACE_MINUTES)
-    s.add_argument("--now", help="RFC 3339 time to evaluate at (tests and replays)")
+    live(s)
     s.add_argument("--out", help="write <repo>.json and README.md here")
-    s.add_argument("--json", action="store_true")
     s.add_argument("--require-coverage", action="store_true",
                    help="exit 1 unless every main commit since onboarding has a post-submit result")
     s.set_defaults(func=cmd_status)
+
+    g = sub.add_parser("groups", help="red builders grouped by regression range, with failure type (V0-GAR-02)")
+    live(g)
+    g.add_argument("--store", help="results store checkout (test-pipelines `results` branch) for failing tests")
+    g.set_defaults(func=cmd_groups)
+
+    b = sub.add_parser("bisect", help="bisect good..bad by running a command on each commit (V0-GAR-02)")
+    b.add_argument("--config", required=True, help="infra-config checkout (culprit verification policy)")
+    b.add_argument("--repo-dir", required=True, help="a clone of the repo holding both commits")
+    b.add_argument("--good", required=True)
+    b.add_argument("--bad", required=True)
+    b.add_argument("--run", required=True, help="shell command; exit 0 pass, 125 can't tell, else fail")
+    b.add_argument("--timeout", type=int, default=1800, help="seconds per probe; a timeout is can't tell")
+    b.add_argument("--json", action="store_true")
+    b.set_defaults(func=cmd_bisect)
 
     args = p.parse_args(argv)
     try:

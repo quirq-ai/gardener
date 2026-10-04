@@ -37,3 +37,10 @@ jobs:
           rc=0; qqgarden status --config .qq/infra-config --backend snapshot \
             --snapshot tests/fixtures/batched-push.json --now 2026-10-04T12:00:00+00:00 --require-coverage || rc=$?
           [ "$rc" -eq 1 ] || { echo "::error::a main commit without a post-submit result was not caught (exit $rc)"; exit 1; }
+      - name: a planted break is bisected to its commit (V0-GAR-02 done-when)
+        run: |
+          eval "$(tools/plant-break.sh "$RUNNER_TEMP/planted" 12 7)"
+          qqgarden bisect --config .qq/infra-config --repo-dir "$RUNNER_TEMP/planted" \
+            --good "$good" --bad "$bad" --run ./check.sh --json | tee "$RUNNER_TEMP/bisect.json"
+          python -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(not (r['culprit']==sys.argv[2] and r['verified']))" \
+            "$RUNNER_TEMP/bisect.json" "$culprit" || { echo "::error::bisection did not name the planted culprit $culprit"; exit 1; }
