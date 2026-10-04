@@ -128,6 +128,9 @@ failure group it finds a culprit, and reverts it if the caps allow:
   infra-config onboards, with contents, pull-requests and actions write, and passes it as
   `QQ_GARDENER_TOKEN`. A PR opened with a workflow's own `GITHUB_TOKEN` starts no workflows and
   would never be gated. Without the App the cycle reports what it would do and creates nothing.
+  The secrets live in the `quirq-infra-bot` environment, limited to `main`, so a workflow on
+  another branch cannot mint the token. The token has no `workflows` permission, so a culprit
+  that changed `.github/workflows/` cannot be reverted automatically (the push is refused).
 
 Presubmit shows both done-whens offline: a planted build break, red on its post-submit and on
 that run's re-run, is reverted and main is green again, 20 minutes after it landed; and with 10
