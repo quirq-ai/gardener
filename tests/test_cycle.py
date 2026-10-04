@@ -476,3 +476,21 @@ def test_cli_revert_leaves_a_one_commit_range_to_the_cycle(config_root, tmp_path
                        "--publish-ledger", "ledger", "--bisect-json", str(bj))
     assert refused(args, capsys, "for bisected ranges only")
     assert not (tmp_path / "forge").exists()
+
+
+def test_cli_revert_takes_a_one_commit_range_whose_first_red_is_a_backfill(config_root, tmp_path, capsys,
+                                                                           monkeypatch):
+    """The cycle sends those to bisection, so the bisected revert must be possible."""
+    xo = build(tmp_path)
+    culprit, parent = xo["commits"][1]["sha"], xo["commits"][2]["sha"]
+    for r in xo["runs"]:
+        if r["commit"] == culprit:
+            r.update(backfill=True, head_sha=xo["commits"][0]["sha"])
+    led = shared_ledger(tmp_path)
+    monkeypatch.setattr(cli, "LEDGER_REMOTE", str(tmp_path / "ledger"))
+    bj = tmp_path / "bisect.json"
+    bj.write_text(bisected(culprit, parent))
+    args = revert_args(config_root, snapshot(tmp_path, **{"xo-space": xo}), led, culprit,
+                       "--publish-ledger", "ledger", "--bisect-json", str(bj), "--json")
+    assert cli.main(args) == 0
+    assert json.loads(capsys.readouterr().out)[0]["step"] == "proposed"

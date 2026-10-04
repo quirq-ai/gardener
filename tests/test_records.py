@@ -148,7 +148,9 @@ def test_commit_titles_cannot_ping_or_link_from_the_stub(cfg, config_root, tmp_p
     assert cycle.inline(evil) == "`" + evil.replace("`", "'") + "`"
     stub = json.loads(next((tmp_path / "issues" / "postmortems").iterdir()).read_text())
     heading = next(line for line in stub["body"].splitlines() if line.startswith("# Postmortem:"))
-    assert heading.endswith("reverted `commit 5`")
+    culprit = xo["commits"][1]["sha"]
+    assert heading.endswith(f"reverted {culprit[:12]}")       # no free text in public titles
+    assert "commit 5" not in stub["body"] and "commit 5" not in stub.get("title", "")
 
 
 def test_a_reservation_without_a_revert_is_reported(cfg, config_root, tmp_path):

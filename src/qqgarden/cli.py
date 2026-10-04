@@ -243,9 +243,12 @@ def cmd_revert(args) -> int:
     if len(found) > 1:
         raise GardenerError(f"{culprit.sha[:12]} is a suspect of {len(found)} red ranges; a person decides")
     [g] = found
-    if len(g.suspects) == 1 and g.last_good:
+    backfilled = any(s.first_bad_backfill for s in status.red
+                     if (s.last_good, s.first_bad) == (g.last_good, g.first_bad))
+    if len(g.suspects) == 1 and g.last_good and not backfilled:
         # The cycle verifies a one-commit range on GitHub's own re-runs; a bisection this command
-        # is handed must not stand in for that.
+        # is handed must not stand in for that. A range whose first red is a backfill is the
+        # exception: the cycle sends it to bisection (newer workflow on an older commit).
         raise GardenerError(f"{g.key} has one suspect: the cycle verifies and reverts it from its "
                             "post-submit re-runs; `revert` is for bisected ranges only")
     verified = True

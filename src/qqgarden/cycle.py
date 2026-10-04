@@ -200,11 +200,6 @@ def inline(text: str, limit: int = 0) -> str:
     return "`" + body + "`"
 
 
-# Issue titles longer than this are cut by the results store's issue mirror (test-pipelines);
-# a summary that fits never loses the closing backtick of its inline title.
-SUMMARY_MAX = 80
-
-
 def revert_title(culprit: str) -> str:
     """The revert PR's title and commit subject: never the culprit's own title, which would reach
     main's history and the PR list raw (`fixes #N` acting again, mentions, links)."""
@@ -237,8 +232,10 @@ def follow_up(repos: list[Repo], backend, ledger: Ledger, records, now: datetime
             g = groups_mod.Group(repo=e.repo, first_bad=e.culprit, last_good=e.last_good,
                                  suspects=[e.culprit], builders=[], kind=e.kind, tests=list(e.tests),
                                  runs=list(e.runs))
-            head = f"{e.kind} break in {e.repo[:40]}: reverted "
-            summary = head + inline(e.title or e.culprit[:12], SUMMARY_MAX - len(head))
+            # Only structured public fields: the culprit's title is the author's free text, and
+            # this line becomes a public issue and postmortem title (test-pipelines' rule since
+            # c725332). The title stays in the revert PR body, as inline code.
+            summary = f"{e.kind} break in {e.repo[:40]}: reverted {e.culprit[:12]}"
             state = records.open(repo, e.culprit, forge.commit_url(repo, e.culprit),
                                  e.culprit_landed_at, url, g, summary)
             step = "recorded"
