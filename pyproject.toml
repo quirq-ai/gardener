@@ -9,7 +9,11 @@ description = "The quirq infra (qq) gardener: keeps main green with tree status,
 readme = "README.md"
 requires-python = ">=3.11"
 # jsonschema: qqcfg validate (infra-config's loader, imported from the pinned checkout).
-dependencies = ["jsonschema==4.26.0"]
+# qqresults: the results store and failure records, by pinned commit (pins.toml [test-pipelines]).
+dependencies = [
+  "jsonschema==4.26.0",
+  "qqresults @ git+https://github.com/quirq-ai/test-pipelines@3aeed94f733a99cac22f29a47578cd8ff88bf3ae",
+]
 
 [project.optional-dependencies]
 test = ["pytest==9.1.1"]

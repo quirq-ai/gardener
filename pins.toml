@@ -4,3 +4,7 @@
 [infra-config]
 source = "https://github.com/quirq-ai/infra-config"
 commit = "a698da40d6ef9a3d79ccd9393417f094ec935123"   # main after #6
+
+[test-pipelines]
+source = "https://github.com/quirq-ai/test-pipelines"
+commit = "3aeed94f733a99cac22f29a47578cd8ff88bf3ae"   # V0-TST-02 (#3): results store

@@ -52,12 +52,43 @@ The `tree-status` workflow runs it every 10 minutes and publishes `status/<repo>
 when something changes, so that branch's log is the tree's open and close history. Readers (the
 release `lkgr` advancer, the gate in v1, the gardener agent) read that branch.
 
+## Grouping and bisection (V0-GAR-02)
+
+`qqgarden groups` turns the red builders of each repo into failure groups, one per regression
+range (Sheriff-o-Matic's grouping): builders that went red over the same last-good..first-bad
+range share one culprit search. Each group says what failed, because the revert caps differ by
+failure type:
+
+- `build` when a `fetch (...)` or `build (...)` step failed (generated builders name each step
+  after its capability), `test` when a `test (...)` step failed or the results store has unexpected
+  tests for that run, else `unknown`, which is never reverted;
+- the failing tests, read from test-pipelines' results store (`--store`, a checkout of its
+  `results` branch).
+
+`qqgarden bisect` finds the culprit in a range by binary search, probing each commit with a
+command in a scratch worktree (exit 0 pass, 125 can't tell, anything else fail, as with
+`git bisect run`). For a qq repo the command is depot's `qq build` or `qq test`. Commits it can't
+tell are skipped. With `require_culprit_verification` (auto_revert.toml) the culprit is probed
+again and its parent once more, so a flaky probe can't name a culprit. A range of one suspect
+still gets verified.
+
+```sh
+qqgarden groups --config <infra-config> --store <results checkout>
+qqgarden bisect --config <infra-config> --repo-dir <clone> --good <sha> --bad <sha> --run 'qq test'
+```
+
+Presubmit plants a break in a 12-commit repo (`tools/plant-break.sh`) and checks that bisection
+names it, verified.
+
+TODO(expert): a probe that re-runs the repo's own post-submit builder on a commit, once
+infra-config's generated post-submit accepts a commit input.
+
 ## v0 status
 
 | Item | What | PR | State |
 |---|---|---|---|
 | V0-GAR-01 | Post-submit on every commit: red detection and tree status | #2 | in review |
-| V0-GAR-02 | Group failures by regression range and bisect | | not started |
+| V0-GAR-02 | Group failures by regression range and bisect | #3 | in review |
 | V0-GAR-03 | Auto-revert within caps | | not started |
 | V0-GAR-04 | Failure record and postmortem stub per revert | | not started |
 
