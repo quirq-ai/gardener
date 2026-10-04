@@ -28,7 +28,9 @@
 name: tree-status
 on:
   schedule:
-    - cron: "2-59/5 * * * *"    # every 5 min, off the hour: a break is reverted within 30 min
+    # GitHub fires schedules best-effort, sometimes hours apart. The `next` job below keeps the
+    # 5-minute cadence; the cron only restarts that chain if it stops.
+    - cron: "2-59/5 * * * *"
   workflow_dispatch:
     inputs:
       bootstrap-ledger:
@@ -40,10 +42,14 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: tree-status            # one writer to the tree-status branch at a time
+  # One writer to the tree-status and ledger branches at a time: only runs on main write (every job
+  # checks the ref), and a run from any other ref gets its own group, so it never replaces the chain's
+  # pending run on main.
+  group: ${{ github.ref == 'refs/heads/main' && 'tree-status' || format('tree-status {0}', github.ref) }}
   cancel-in-progress: false
 jobs:
   tree-status:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -126,6 +132,7 @@ jobs:
           exit 1
 
   cycle:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: quirq-gardener   # holds the App's secrets; deployments limited to main
@@ -243,3 +250,41 @@ jobs:
           python -m qqgarden.cli cycle --config .qq/infra-config --ledger .qq/ledger \
             --publish-ledger "${{ steps.ledger.outputs.publish }}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
+
+  next:
+    # Keeps the 5-minute cadence a break needs to be reverted within 30 min: each run on main
+    # dispatches the next one, with no inputs, on refs/heads/main only. The concurrency group holds
+    # at most one pending run and cancels the older, so the push, cron, re-run and dispatch chains
+    # collapse into one; a cancelled run never chains, and the newer pending run carries it on. A
+    # failed or timed-out run still chains; a chain that stops anyway is restarted by the cron.
+    # Kill switch: repo variable QQ_TREE_STATUS_CHAIN=off (or disable the workflow).
+    # The delay: environment `tree-status-tick`'s wait timer when it has one (no runner held while
+    # waiting); otherwise this job sleeps the rest of 4.5 minutes after the run started. With the
+    # timer the period is the run's own time plus 4 minutes (about 4.5 today). A flip of the kill
+    # switch lets a `next` already waiting dispatch once more.
+    # TODO(suraj): give `tree-status-tick` a 4-minute wait timer, deployments limited to main, and
+    # nothing else: no required reviewers and no secrets (a reviewer gate would stop the chain).
+    needs: [tree-status, cycle]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && vars.QQ_TREE_STATUS_CHAIN != 'off' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: tree-status-tick
+    permissions:
+      actions: write            # dispatch this workflow, nothing else
+    steps:
+      - name: dispatch the next run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # This attempt's start; if it cannot be read, dispatch without waiting rather than stop.
+          started=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
+                      --jq .run_started_at || true)
+          left=0
+          if [ -n "$started" ]; then left=$(( 270 - ($(date +%s) - $(date -d "$started" +%s || date +%s)) )); fi
+          if [ "$left" -gt 270 ]; then left=270; fi   # a skewed clock never outlasts the job's timeout
+          if [ "$left" -gt 0 ]; then sleep "$left"; fi
+          for try in 1 2 3; do
+            gh workflow run tree-status.yml --repo "$GITHUB_REPOSITORY" --ref refs/heads/main && exit 0
+            [ "$try" -eq 3 ] || sleep $((try * 20))
+          done
+          echo "::error::could not dispatch the next run; the cron restarts the chain"; exit 1
