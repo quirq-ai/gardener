@@ -79,10 +79,10 @@ class Ledger:
     def _commit_push(self, message: str, recheck=None) -> None:
         git.run([*IDENTITY, "commit", "--quiet", "-m", message], cwd=self.root)
         for _ in range(3):   # another writer may have pushed; records never collide, so rebase is safe
-            if git.run(["push", "--quiet", "origin", f"HEAD:{self.publish}"], cwd=self.root,
+            if git.run(["push", "--quiet", "origin", f"HEAD:refs/heads/{self.publish}"], cwd=self.root,
                        check=False).returncode == 0:
                 return
-            pulled = git.run([*IDENTITY, "pull", "--quiet", "--rebase", "origin", self.publish],
+            pulled = git.run([*IDENTITY, "pull", "--quiet", "--rebase", "origin", f"refs/heads/{self.publish}"],
                              cwd=self.root, check=False)
             if pulled.returncode != 0:   # e.g. the same record written twice: leave the worktree clean
                 git.run(["rebase", "--abort"], cwd=self.root, check=False)
@@ -98,7 +98,7 @@ class Ledger:
     def refresh(self) -> None:
         """Pull in every other writer's records before deciding anything."""
         if self.publish:
-            git.run([*IDENTITY, "pull", "--quiet", "--rebase", "origin", self.publish], cwd=self.root)
+            git.run([*IDENTITY, "pull", "--quiet", "--rebase", "origin", f"refs/heads/{self.publish}"], cwd=self.root)
 
     def check_published(self) -> None:
         """The worktree is exactly the published branch: no local commits or edits (a deleted
@@ -106,7 +106,7 @@ class Ledger:
         if git.run(["status", "--porcelain"], cwd=self.root).stdout.strip():
             raise GardenerError(f"{self.root} has uncommitted changes; the caps are counted on the "
                                 f"published {self.publish} branch only")
-        git.run(["fetch", "--quiet", "origin", self.publish], cwd=self.root)
+        git.run(["fetch", "--quiet", "origin", f"refs/heads/{self.publish}"], cwd=self.root)
         head = git.run(["rev-parse", "HEAD"], cwd=self.root).stdout.strip()
         published = git.run(["rev-parse", "FETCH_HEAD"], cwd=self.root).stdout.strip()
         if head != published:

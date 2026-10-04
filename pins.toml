@@ -7,4 +7,4 @@ commit = "bf3ad29834d85489c49aa6d41ec3c7e59474b746"   # main after #11: backfill
 
 [test-pipelines]
 source = "https://github.com/quirq-ai/test-pipelines"
-commit = "1e3ddb19c7611527f5e231ab63d4cda8c0f68781"   # main after #6 (V0-TST-04 failure records) and #5
+commit = "ece61c0f1af4549e7da09f6b7ded3dcbc174f77c"   # main after the audit fixes (B1-B3, #17): store origin checks, public-only records

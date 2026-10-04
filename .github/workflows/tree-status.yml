@@ -15,7 +15,8 @@
 # QQ_GARDENER_APP_PRIVATE_KEY in this repo's `quirq-gardener` environment, limited to main. Install
 # it on a repo before infra-config onboards that repo. Without it the cycle reports what it would
 # do and creates nothing.
-# It runs no code from the repos it gardens, only `git revert`. Next to its write tokens it runs
+# It runs no code from the repos it gardens, only `git revert`. Branches are always named in full
+# (refs/heads/...), so a tag of the same name never stands in for one. Next to its write tokens it runs
 # only this repo's code and qqresults (pins.toml) from source, plus requirements/runtime.lock
 # (exact versions, hash-checked wheels). No checkout keeps credentials: only the steps that push
 # (or read runs and write issues through the API) get the job token, in their own environment.
@@ -82,7 +83,7 @@ jobs:
           echo "PYTHONPATH=$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE/.qq/test-pipelines/src" >> "$GITHUB_ENV"
       - name: open the tree-status branch
         run: |
-          if git fetch --depth 1 origin tree-status; then
+          if git fetch --depth 1 origin refs/heads/tree-status; then
             git worktree add -B tree-status .qq/publish FETCH_HEAD
           else
             git worktree add --orphan -b tree-status .qq/publish
@@ -117,7 +118,7 @@ jobs:
               commit -q -m "tree-status: $msg"
           auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
           git -c "http.https://github.com/${GITHUB_REPOSITORY}.extraheader=AUTHORIZATION: basic $auth" \
-              push origin tree-status
+              push origin HEAD:refs/heads/tree-status
       - name: every main commit has a post-submit result (V0-GAR-01 done-when)
         if: steps.status.outputs.rc != '0'
         run: |
@@ -203,9 +204,9 @@ jobs:
           # empty ledger after a fetch error or a deletion would count zero reverts.
           [ "$(git remote get-url origin)" = "https://github.com/${GITHUB_REPOSITORY}" ] \
             || { echo "::error::unexpected origin $(git remote get-url origin)"; exit 1; }
-          rc=0; git ls-remote --exit-code --heads origin ledger > /dev/null || rc=$?
+          rc=0; git ls-remote --exit-code origin refs/heads/ledger > /dev/null || rc=$?
           if [ "$rc" -eq 0 ]; then
-            git fetch --depth 50 origin ledger
+            git fetch --depth 50 origin refs/heads/ledger
             git worktree add -B ledger .qq/ledger FETCH_HEAD
             echo "publish=ledger" >> "$GITHUB_OUTPUT"
           elif [ "$rc" -eq 2 ] && [ "$BOOTSTRAP" = "true" ]; then

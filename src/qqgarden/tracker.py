@@ -29,7 +29,7 @@ class GitHubTracker:
         return cls(repo, token, ledger_branch or "ledger") if repo and token else None
 
     def record_url(self, state) -> str:
-        return (f"https://github.com/{self.repo}/tree/{self.ledger_branch}/failures/"
+        return (f"https://github.com/{self.repo}/tree/refs/heads/{self.ledger_branch}/failures/"
                 f"{state.path.name}")
 
     def mirror(self, state) -> str:

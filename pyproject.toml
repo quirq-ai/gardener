@@ -13,7 +13,7 @@ license = "Apache-2.0"
 # qqresults: the results store and failure records, by pinned commit (pins.toml [test-pipelines]).
 dependencies = [
   "jsonschema==4.26.0",
-  "qqresults @ git+https://github.com/quirq-ai/test-pipelines@1e3ddb19c7611527f5e231ab63d4cda8c0f68781",
+  "qqresults @ git+https://github.com/quirq-ai/test-pipelines@ece61c0f1af4549e7da09f6b7ded3dcbc174f77c",
 ]
 
 [project.optional-dependencies]

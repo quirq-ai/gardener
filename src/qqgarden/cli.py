@@ -214,8 +214,9 @@ def cmd_revert(args) -> int:
     the failure type comes from that range's own runs (never from the caller or the results store),
     verification is the `qqgarden bisect --json` result for this culprit (a failing probe of it, a
     passing probe of its first parent), and the caps are counted on the shared, freshly pulled
-    `ledger` branch of LEDGER_REMOTE. The bisection itself stays attested by the agent that ran it:
-    its probe command is the agent's choice, so this path is for the gardener agent only."""
+    `ledger` branch of LEDGER_REMOTE. A one-commit range is refused: the cycle verifies those on
+    GitHub's own runs. For a longer range the bisection stays attested by the agent that ran it
+    (its probe command is the agent's choice), so this path is for the gardener agent only."""
     from qqgarden import cycle
     from qqgarden.ledger import Ledger
     from qqgarden.policy import Policy
@@ -242,6 +243,14 @@ def cmd_revert(args) -> int:
     if len(found) > 1:
         raise GardenerError(f"{culprit.sha[:12]} is a suspect of {len(found)} red ranges; a person decides")
     [g] = found
+    backfilled = any(s.first_bad_backfill for s in status.red
+                     if (s.last_good, s.first_bad) == (g.last_good, g.first_bad))
+    if len(g.suspects) == 1 and g.last_good and not backfilled:
+        # The cycle verifies a one-commit range on GitHub's own re-runs; a bisection this command
+        # is handed must not stand in for that. A range whose first red is a backfill is the
+        # exception: the cycle sends it to bisection (newer workflow on an older commit).
+        raise GardenerError(f"{g.key} has one suspect: the cycle verifies and reverts it from its "
+                            "post-submit re-runs; `revert` is for bisected ranges only")
     verified = True
     if policy.require_culprit_verification:
         try:
