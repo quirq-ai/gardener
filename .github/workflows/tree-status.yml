@@ -281,6 +281,7 @@ jobs:
                       --jq .run_started_at || true)
           left=0
           if [ -n "$started" ]; then left=$(( 270 - ($(date +%s) - $(date -d "$started" +%s || date +%s)) )); fi
+          if [ "$left" -gt 270 ]; then left=270; fi   # a skewed clock never outlasts the job's timeout
           if [ "$left" -gt 0 ]; then sleep "$left"; fi
           for try in 1 2 3; do
             gh workflow run tree-status.yml --repo "$GITHUB_REPOSITORY" --ref refs/heads/main && exit 0
