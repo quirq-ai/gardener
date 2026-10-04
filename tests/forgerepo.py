@@ -41,13 +41,20 @@ def build(tmp: Path, repo="xo-space", n=6, brk=5, step_min=10, red_after_break=T
         url = f"https://example.invalid/{repo}/runs/{100 + i}"
         runs.append({"builder": f"{repo}-postsubmit", "commit": sha, "status": "completed",
                      "conclusion": "failure" if red else "success", "id": str(100 + i), "attempt": 1,
-                     "url": url})
+                     "url": url, "started_at": stamp(landed + timedelta(minutes=1))})
         if red:
             steps[url] = ["build (demo)"]
-        if i == brk and rerun_red:   # the culprit's post-submit was re-run, and is red again
-            runs.append({**runs[-1], "attempt": 2})
+        if i == brk and rerun_red:   # the culprit's post-submit was re-run, and is red again,
+            runs.append({**runs[-1], "attempt": 2, "started_at": stamp(NOW - timedelta(minutes=3))})
+            parent = next(r for r in runs if r["id"] == str(100 + i - 1))
+            # and its parent's, green again, re-run after the culprit failed
+            runs.append({**parent, "attempt": 2, "started_at": stamp(NOW - timedelta(minutes=2))})
     g(tmp, "clone", "-q", "--bare", str(work), str(remote))
     return {"commits": commits, "runs": runs, "failed_steps": steps, "remote": remote.name}
+
+
+def stamp(t) -> str:
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def snapshot(tmp: Path, **repos) -> Path:

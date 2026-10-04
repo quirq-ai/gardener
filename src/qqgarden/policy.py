@@ -11,9 +11,9 @@
 - `land`: as propose, and the gardener also queues it to land. Only when the type's submit limit
   has room, the culprit is younger than max_culprit_age_hours, and the repo allows auto-landing.
 
-Which repos allow auto-landing is read from `[policy] auto_land_repos`. infra-config does not have
-that field yet; with none, every revert is proposed only, which is what v0 wants for xo-space and
-innernet (suraj merges their reverts).
+Which repos allow auto-landing is read from `[policy] auto_land_repos` (required by infra-config's
+schema). It is empty in v0, so every revert is proposed only and suraj merges xo-space's and
+innernet's reverts.
 """
 from __future__ import annotations
 

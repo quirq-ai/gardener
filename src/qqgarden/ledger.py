@@ -3,6 +3,8 @@
     <root>/reverts/<id>.json   written before the revert PR is opened (a reservation)
     <root>/landed/<id>.json    written when the gardener queues it to land
 
+A reservation with action "land" counts against the submit limit as soon as it exists.
+
 Reserving first means a run that dies after opening a PR has still counted it: the ledger can
 over-count, never under-count. On GitHub the ledger lives on this repo's `ledger` branch.
 TODO(expert): a real database once Launchpad exists.
@@ -93,6 +95,24 @@ class Ledger:
                 raise GardenerError(f"another writer changed the ledger first; now refused: {why}")
         raise GardenerError(f"could not push \"{message}\" to the {self.publish} branch; nothing was created")
 
+    def refresh(self) -> None:
+        """Pull in every other writer's records before deciding anything."""
+        if self.publish:
+            git.run([*IDENTITY, "pull", "--quiet", "--rebase", "origin", self.publish], cwd=self.root)
+
+    def check_published(self) -> None:
+        """The worktree is exactly the published branch: no local commits or edits (a deleted
+        reservation, say) survive a pull to be counted, or pushed with the next record."""
+        if git.run(["status", "--porcelain"], cwd=self.root).stdout.strip():
+            raise GardenerError(f"{self.root} has uncommitted changes; the caps are counted on the "
+                                f"published {self.publish} branch only")
+        git.run(["fetch", "--quiet", "origin", self.publish], cwd=self.root)
+        head = git.run(["rev-parse", "HEAD"], cwd=self.root).stdout.strip()
+        published = git.run(["rev-parse", "FETCH_HEAD"], cwd=self.root).stdout.strip()
+        if head != published:
+            raise GardenerError(f"{self.root} is not the published {self.publish} branch (HEAD "
+                                f"{head[:12]}, {self.publish} {published[:12]}); reset it to the branch")
+
     def reserve(self, e: Entry, recheck=None) -> None:
         self._write_once(self.root / "reverts" / f"{e.id}.json", asdict(e), recheck)
 
@@ -147,15 +167,21 @@ class Ledger:
                 for p in (sorted(d.glob("*.json")) if d.is_dir() else [])}
 
     def counts(self, since: datetime, exclude: str = "") -> Counts:
+        """A reservation that decided to land counts as landed from the moment it is written, so
+        two writers racing for the last submit slot see each other, and a run that dies between
+        queueing the land and recording it never under-counts."""
         from qqgarden.postsubmit import parse_time
-        entries = [e for e in self.entries() if parse_time(e.created_at) >= since and e.id != exclude]
+        every = self.entries()
+        entries = [e for e in every if parse_time(e.created_at) >= since and e.id != exclude]
         kinds: dict[str, int] = {}
         for e in entries:
             kinds[e.kind] = kinds.get(e.kind, 0) + 1
-        by_id = {e.id: e for e in self.entries()}
+        by_id = {e.id: e for e in every}
+        landing = {e.id for e in entries if e.action == "land"}
+        landing |= {rid for rid, at in self.landed().items()
+                    if rid in by_id and rid != exclude and parse_time(at) >= since}
         landed: dict[str, int] = {}
-        for rid, at in self.landed().items():
-            if rid in by_id and parse_time(at) >= since:
-                k = by_id[rid].kind
-                landed[k] = landed.get(k, 0) + 1
+        for rid in landing:
+            k = by_id[rid].kind
+            landed[k] = landed.get(k, 0) + 1
         return Counts(created=len(entries), created_by_kind=kinds, landed_by_kind=landed)

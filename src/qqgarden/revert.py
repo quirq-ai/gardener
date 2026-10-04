@@ -46,7 +46,9 @@ def make(clone_url: str, branch: str, culprit: str, workdir: Path, message_foote
                     reason=f"reverting {culprit[:12]} conflicts with later commits; not a clean revert")
     if git.run(["diff", "--cached", "--quiet"], cwd=work, check=False).returncode == 0:
         return Made(False, work, base, title=title, reason=f"reverting {culprit[:12]} changes nothing")
-    msg = f'Revert "{title}"\n\nThis reverts commit {culprit}.\n\n{message_footer.strip()}\n'
+    # The culprit's title stays out of the message: it becomes main's squash message, where
+    # `fixes #N` and mentions in it would act again.
+    msg = f"Revert {culprit[:12]} (qq gardener)\n\nThis reverts commit {culprit}.\n\n{message_footer.strip()}\n"
     git.run(["commit", "--quiet", "-m", msg], cwd=work)
     commit = git.run(["rev-parse", "HEAD"], cwd=work).stdout.strip()
     return Made(True, work, base, commit, title)

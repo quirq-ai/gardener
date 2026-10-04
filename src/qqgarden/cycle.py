@@ -18,6 +18,7 @@ reserves it (so it counts even if a later step dies), then the branch and PR are
 """
 from __future__ import annotations
 
+import re
 import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -29,7 +30,7 @@ from qqgarden.config import Repo
 from qqgarden.errors import GardenerError
 from qqgarden.forge import NoIdentity
 from qqgarden.ledger import Entry, Ledger, revert_id
-from qqgarden.model import Commit, RedSpan, TreeStatus
+from qqgarden.model import CONCLUSIONS, Commit, RedSpan, RunState, TreeStatus
 from qqgarden.policy import Action, Decision, Policy, decide
 
 
@@ -64,7 +65,7 @@ def pr_body(g: groups_mod.Group, culprit: Commit, decision_reason: str, action: 
             f"Proposed only: {decision_reason}. A person or the gardener rotation lands it.")
     return f"""Automatic revert by the quirq infra gardener (V0-GAR-03).
 
-Culprit: {culprit.sha} {inline(culprit.title)}
+Culprit: {culprit.sha} {inline(culprit.title, 200)}
 Failure group: `{g.key}` ({g.kind} failure in {", ".join(g.builders)})
 Regression range: {g.last_good[:12] or "(none)"}..{g.first_bad[:12]}
 
@@ -78,11 +79,53 @@ close it and say why in the gardener thread; the culprit is then not reverted ag
 """
 
 
-def verified(spans: list[RedSpan]) -> bool:
-    """LUCI-style: the culprit's own post-submit was re-run and is red again, and its parent (the
-    last good commit) is green, for every builder in the group. A later red commit is not proof:
-    it may be a different break, and the first red may have been a flake."""
-    return bool(spans) and all(s.last_good and s.first_bad_attempt > 1 for s in spans)
+# Attempts of one run the cycle asks for before giving up on verifying it (a person then looks).
+MAX_ATTEMPTS = 3
+
+
+@dataclass
+class Verification:
+    state: str                                  # verified, waiting or flaky
+    reason: str
+    reruns: list[tuple[str, bool]] = field(default_factory=list)   # (run url, failed jobs only)
+
+
+def verify(spans: list[RedSpan], backend, repo: Repo) -> Verification:
+    """With and without the suspect, for every builder in the group: the culprit's own post-submit
+    run is red on its last two attempts and was never green, and its parent's (the last good
+    commit) is green on its last two and was never red. A later red commit proves nothing (it may
+    be another break), one red may be a flake, and a parent that went green once may hide an
+    environment break; attempts are read from the backend, not inferred from an attempt number."""
+    if not spans or any(not s.last_good or not s.last_good_url for s in spans):
+        return Verification("waiting", "no green parent run to compare with")
+    if any(s.first_bad_running or s.last_good_running for s in spans):
+        return Verification("waiting", "a re-run is in progress")
+    reruns, flaky = [], []
+    for s in spans:
+        culprit_runs = backend.attempts(repo, s.url, s.first_bad_attempt)
+        parent_runs = backend.attempts(repo, s.last_good_url, s.last_good_attempt)
+        # "Without the suspect" must be now: the parent's last green started after the culprit
+        # first failed, so an environment that broke since then cannot verify an innocent commit.
+        failed_at = postsubmit.parse_time(culprit_runs[0][1]) if culprit_runs[0][1] else None
+        last = parent_runs[-1][1]
+        fresh = failed_at is not None and bool(last) and postsubmit.parse_time(last) > failed_at
+        for url, attempts, want, other, failed_only, ok in (
+                (s.url, culprit_runs, RunState.RED, RunState.GREEN, True, True),
+                (s.last_good_url, parent_runs, RunState.GREEN, RunState.RED, False, fresh)):
+            states = [CONCLUSIONS.get(c, RunState.CANCELLED) for c, _ in attempts]
+            if other in states:
+                flaky.append(f"{url} was {other.value} on one attempt and {want.value} on another")
+            elif states[-2:] != [want, want] or not ok:
+                if len(states) >= MAX_ATTEMPTS:
+                    flaky.append(f"{url} gave no two {want.value} attempts in a row in {len(states)}"
+                                 + ("" if ok else ", the last after the culprit failed"))
+                else:
+                    reruns.append((url, failed_only))
+    if flaky:
+        return Verification("flaky", "; ".join(flaky))
+    if reruns:
+        return Verification("waiting", "re-running " + ", ".join(u for u, _ in reruns), reruns)
+    return Verification("verified", "red twice on its own run, green twice on its parent's")
 
 
 # TODO(expert): a config value; backfills in flight per repo, so a long batched history fills in
@@ -147,10 +190,25 @@ def run(cfg: dict, repos: list[Repo], backend, ledger: Ledger, policy: Policy, n
 LANDED_POLL = timedelta(days=14)
 
 
-def inline(text: str) -> str:
+def inline(text: str, limit: int = 0) -> str:
     """A commit title shown in markdown, as inline code: its author cannot mention people, link or
-    embed anything through the gardener's issues and PRs."""
-    return "`" + " ".join(text.replace("`", "'").split()) + "`"
+    embed anything through the gardener's issues and PRs. With `limit`, the whole result (backticks
+    included) fits in it: the title is cut inside the backticks, so the code span always closes."""
+    body = " ".join(text.replace("`", "'").split())
+    if limit and len(body) + 2 > limit:
+        body = body[:max(limit - 5, 0)] + "..."
+    return "`" + body + "`"
+
+
+# Issue titles longer than this are cut by the results store's issue mirror (test-pipelines);
+# a summary that fits never loses the closing backtick of its inline title.
+SUMMARY_MAX = 80
+
+
+def revert_title(culprit: str) -> str:
+    """The revert PR's title and commit subject: never the culprit's own title, which would reach
+    main's history and the PR list raw (`fixes #N` acting again, mentions, links)."""
+    return f"Revert {culprit[:12]} (qq gardener)"
 
 
 def follow_up(repos: list[Repo], backend, ledger: Ledger, records, now: datetime) -> list[Outcome]:
@@ -179,7 +237,8 @@ def follow_up(repos: list[Repo], backend, ledger: Ledger, records, now: datetime
             g = groups_mod.Group(repo=e.repo, first_bad=e.culprit, last_good=e.last_good,
                                  suspects=[e.culprit], builders=[], kind=e.kind, tests=list(e.tests),
                                  runs=list(e.runs))
-            summary = f"{e.kind} break in {e.repo}: reverted {inline(e.title or e.culprit[:12])}"
+            head = f"{e.kind} break in {e.repo[:40]}: reverted "
+            summary = head + inline(e.title or e.culprit[:12], SUMMARY_MAX - len(head))
             state = records.open(repo, e.culprit, forge.commit_url(repo, e.culprit),
                                  e.culprit_landed_at, url, g, summary)
             step = "recorded"
@@ -226,27 +285,72 @@ def handle_group(cfg, repo: Repo, g, status: TreeStatus, by_sha: dict, backend, 
         return Outcome(**base, culprit=culprit.sha, step="needs-bisect",
                        reason="the first red is a backfill run (newer workflow on an older commit); "
                               "confirm with `qqgarden bisect`")
-    if policy.require_culprit_verification and not verified(spans):
-        reason = "red once; waiting for a re-run of its post-submit to be red again"
-        if not dry_run and backend.forge and not backend.forge.identity_problem():
-            asked = [s.url for s in spans if s.first_bad_attempt == 1 and backend.forge.rerun(repo, s.url)]
-            if asked:
-                reason = "red once; asked for a re-run of " + ", ".join(asked)
-        return Outcome(**base, culprit=culprit.sha, step="awaiting-verification", reason=reason)
-    return revert_culprit(cfg, repo, g, culprit, backend, ledger, policy, now, dry_run, verified=True)
+    if GARDENER_REVERT.match(culprit.title):
+        return Outcome(**base, culprit=culprit.sha, step="needs-person",
+                       reason="the culprit is a gardener revert; the gardener never reverts its own revert")
+    if g.kind not in policy.types:
+        return Outcome(**base, culprit=culprit.sha, step="refused",
+                       reason=f"{g.kind} failures are never reverted automatically; for a person")
+    if policy.require_culprit_verification:
+        v = verify(spans, backend, repo)
+        if v.state == "flaky":
+            return Outcome(**base, culprit=culprit.sha, step="needs-person", reason="not verified: " + v.reason)
+        if v.state == "waiting":
+            reason = v.reason
+            if v.reruns and not dry_run and backend.forge and not backend.forge.identity_problem():
+                try:
+                    asked = [u for u, failed_only in v.reruns if backend.forge.rerun(repo, u, failed_only)]
+                except GardenerError as e:
+                    # e.g. a run too old to re-run: asking again every cycle would never verify it
+                    return Outcome(**base, culprit=culprit.sha, step="needs-person",
+                                   reason=f"not verified: the forge refused a re-run ({e})")
+                reason = ("asked for re-runs of " + ", ".join(asked)) if asked else reason
+            return Outcome(**base, culprit=culprit.sha, step="awaiting-verification", reason=reason)
+    return revert_culprit(cfg, repo, g, culprit, backend, ledger, policy, now, dry_run, verified=True,
+                          status=status, order={sha: i for i, sha in enumerate(by_sha)})
+
+
+# The subject of every revert the gardener makes (revert_title). A culprit titled like this is
+# never reverted: a person decides. Anyone can title a commit this way, which only costs a person.
+# A squash or merge queue lands it as "<PR title> (#N)".
+GARDENER_REVERT = re.compile(r"^Revert [0-9a-f]{12} \(qq gardener\)( \(#\d+\))?$")
+
+
+def red_after(status: TreeStatus | None, g: groups_mod.Group, order: dict[str, int], sha: str) -> bool:
+    """Some builder of the group is red on `sha` or a newer commit (`order`: newest first, 0 up)."""
+    # A landed revert is newer than its culprit, which is listed, so it is listed too once the
+    # history is read again; until then its own post-submit cannot have reported either.
+    if status is None or sha not in order:
+        return False
+    spans = [s for s in status.red if (s.last_good, s.first_bad) == (g.last_good, g.first_bad)]
+    return any(order.get(s.latest_bad, len(order)) <= order[sha] for s in spans)
 
 
 def revert_culprit(cfg, repo: Repo, g: groups_mod.Group, culprit: Commit, backend, ledger: Ledger,
-                   policy: Policy, now: datetime, dry_run: bool, verified: bool) -> Outcome:
+                   policy: Policy, now: datetime, dry_run: bool, verified: bool,
+                   status: TreeStatus | None = None, order: dict[str, int] | None = None) -> Outcome:
+    """`status` and `order` (commit -> age, newest 0) let it tell a landed revert that left the
+    tree red from one whose own post-submit has not reported yet."""
+    order = order or {}
     base = dict(repo=repo.name, group=g.key, kind=g.kind, runs=g.runs, culprit=culprit.sha)
     rid = revert_id(repo.name, culprit.sha)
     branch = revert.branch_name(culprit.sha)
     forge = backend.forge
     if forge is None:
         raise GardenerError(f"backend for {repo.name} has no forge")
+    if GARDENER_REVERT.match(culprit.title):
+        return Outcome(**base, step="needs-person",
+                       reason="the culprit is a gardener revert; the gardener never reverts its own revert")
     linked = ledger.revert_links().get(rid, "")
     existing = linked or forge.existing_revert(repo, culprit.sha)
     if existing:
+        landed = forge.landed(repo, existing)
+        if landed and red_after(status, g, order, landed.rstrip("/").rsplit("/", 1)[-1]):
+            # The range stays anchored at the reverted commit, so a second break after it would
+            # hide behind "already has a revert": a person looks at the still-red tree.
+            return Outcome(**base, step="needs-person", revert=existing,
+                           reason="still red after its revert landed: another break, or the revert "
+                                  "did not fix it; bisect from the revert")
         return Outcome(**base, step="refused", reason="this culprit already has a revert", revert=existing)
     if forge.branch_exists(repo, branch):
         return Outcome(**base, step="stuck", reason=(
@@ -282,13 +386,14 @@ def revert_culprit(cfg, repo: Repo, g: groups_mod.Group, culprit: Commit, backen
                                  action=action.value, created_at=timestamp(now), reason=reason,
                                  group=g.key, runs=g.runs, last_good=g.last_good, title=culprit.title,
                                  culprit_landed_at=culprit.landed_at, tests=g.tests),
-                           recheck=lambda: "" if judge().action is not Action.REFUSE else judge().reason)
+                           recheck=lambda: "" if (r := judge()).action is action else
+                           f"now {r.action.value}: {r.reason}")
         forge.push(made.workdir, repo, branch)
-        url = forge.open_revert(repo, branch, made.base, f'Revert "{made.title}"',
+        url = forge.open_revert(repo, branch, made.base, revert_title(culprit.sha),
                                 pr_body(g, culprit, reason, action, g.runs), assignees(cfg))
     ledger.set_revert(rid, url)
     if action is Action.LAND:
-        forge.queue_land(repo, url)
+        forge.queue_land(repo, url, made.commit)
         ledger.mark_landed(rid, timestamp(now))
         return Outcome(**base, step="reverted", reason=reason, revert=url)
     return Outcome(**base, step="proposed", reason=reason, revert=url)

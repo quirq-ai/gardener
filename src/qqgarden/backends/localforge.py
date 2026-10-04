@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 from qqgarden import git
+from qqgarden.errors import GardenerError
 from qqgarden.revert import branch_name
 
 
@@ -51,13 +52,16 @@ class LocalForge:
                                                    "assignees": assignees}, indent=2))
         return url
 
-    def queue_land(self, repo, url: str) -> None:
+    def queue_land(self, repo, url: str, head: str = "") -> None:
         pr = json.loads((self.dir / "prs" / f"{url.rsplit('/', 1)[1]}.json").read_text())
         remote = Path(self.remotes[repo.name])
+        tip = git.run(["rev-parse", f"refs/heads/{pr['branch']}"], cwd=remote).stdout.strip()
+        if head and tip != head:
+            raise GardenerError(f"{url}: its head is no longer the revert commit {head[:12]}; not landing it")
         git.run(["push", "--quiet", ".", f"refs/heads/{pr['branch']}:refs/heads/{repo.default_branch}"],
                 cwd=remote)
 
-    def rerun(self, repo, run_url: str) -> bool:
+    def rerun(self, repo, run_url: str, failed_only: bool = True) -> bool:
         return False
 
     def commit_url(self, repo, sha: str) -> str:
