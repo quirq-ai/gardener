@@ -2,25 +2,23 @@
   "branch": "main",
   "builders": {
     "innernet-postsubmit": {
-      "commit": "",
-      "state": "none",
-      "url": ""
+      "commit": "d31bc87798663f665f8e4d07be97a0633e560482",
+      "state": "green",
+      "url": "https://github.com/quirq-ai/innernet/actions/runs/37205792957"
     }
   },
   "coverage": {
     "cancelled": [],
-    "commits": 0,
+    "commits": 1,
     "missing": [],
     "pending": [],
-    "since": ""
+    "since": "d31bc87798663f665f8e4d07be97a0633e560482"
   },
-  "head": "149397315dfff0da85fc759e173f94e302da8a64",
-  "notes": [
-    "qq-innernet-postsubmit.yml is not in quirq-ai/innernet: the post-submit workflow has not been delivered (infra-config `qqcfg deliver`)"
-  ],
-  "reason": "no post-submit verdict yet from innernet-postsubmit",
+  "head": "d31bc87798663f665f8e4d07be97a0633e560482",
+  "notes": [],
+  "reason": "every post-submit builder's newest verdict is green",
   "red": [],
   "repo": "innernet",
   "schema": "qq-tree-status/1",
-  "state": "unknown"
+  "state": "open"
 }

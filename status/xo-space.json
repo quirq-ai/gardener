@@ -9,15 +9,15 @@
   },
   "coverage": {
     "cancelled": [],
-    "commits": 0,
+    "commits": 1,
     "missing": [],
-    "pending": [],
-    "since": ""
+    "pending": [
+      "d70c48aed3dda27ee73fbc44d9b00cd60073356c xo-space-postsubmit"
+    ],
+    "since": "d70c48aed3dda27ee73fbc44d9b00cd60073356c"
   },
-  "head": "c3cea98c8e70479b1f0cb8f871e28f8f6ee5a4f6",
-  "notes": [
-    "qq-xo-space-postsubmit.yml is not in quirq-ai/xo-space: the post-submit workflow has not been delivered (infra-config `qqcfg deliver`)"
-  ],
+  "head": "d70c48aed3dda27ee73fbc44d9b00cd60073356c",
+  "notes": [],
   "reason": "no post-submit verdict yet from xo-space-postsubmit",
   "red": [],
   "repo": "xo-space",
