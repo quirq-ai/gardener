@@ -65,6 +65,7 @@ class BuilderRun:
     url: str = ""
     finished_at: str = ""
     backfill: bool = False  # a dispatched run for a commit its push run skipped or lost
+    head_sha: str = ""      # what a backfill ran from: its workflow file is that commit's
 
     @property
     def state(self) -> RunState:
@@ -95,6 +96,7 @@ class RedSpan:
     suspects: list[str] = field(default_factory=list)
     url: str = ""            # the first red run
     first_bad_attempt: int = 1   # a re-run that is still red verifies the culprit (GAR-03)
+    first_bad_backfill: bool = False  # the first red came from a backfill, run with a newer workflow
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,7 @@ class Coverage:
     cancelled: list[str] = field(default_factory=list)
     pending: list[str] = field(default_factory=list)
     retried: list[str] = field(default_factory=list)     # cancelled even when backfilled: for a person
+    backfilling: list[str] = field(default_factory=list)  # backfills still running
 
     @property
     def complete(self) -> bool:

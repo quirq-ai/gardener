@@ -42,9 +42,12 @@ and those runs, and works out:
   missing or cancelled one is a hole a culprit can hide in, and fails the check.
 - **backfill**: a push of several commits runs only the newest, so the gardener's cycle fills each
   hole by dispatching that builder's workflow with the commit (infra-config's `commit` input),
-  oldest first, at most 10 per repo per cycle. A dispatched run's head is the branch tip, so it is
-  matched by its run-name, `<builder> <commit>`, and only when it ran on `main`. A hole whose
-  backfill was cancelled too is left for a person. Dispatching needs the bot identity.
+  oldest first, with at most 10 in flight per repo. A dispatched run's head is the branch tip, so
+  it is matched by its run-name, `<builder> <commit>`, and counts only when it ran from a `main`
+  commit at or after the one it names. A backfill runs main's newer workflow on the older commit,
+  so a red backfill never names a culprit by itself: the cycle asks for a bisection. A hole whose
+  backfill was cancelled too is left for a person, and re-running its push run clears it.
+  Dispatching needs the bot identity.
 
 ```sh
 qqgarden status --config <infra-config checkout>                 # live, github backend

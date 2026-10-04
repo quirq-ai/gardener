@@ -83,7 +83,7 @@ class Backend:
         input; the workflow itself refuses a commit that is not on the default branch)."""
         token = self._need_identity()
         self._send("POST", f"/repos/{repo.slug}/actions/workflows/{workflow_file(builder)}/dispatches",
-                   token, {"ref": repo.default_branch, "inputs": {"commit": commit}})
+                   token, {"ref": f"refs/heads/{repo.default_branch}", "inputs": {"commit": commit}})
 
     # --- evidence -----------------------------------------------------------------------------
 
@@ -220,12 +220,13 @@ def _own_run(repo: Repo, builder: str, event: str, r: dict) -> BuilderRun | None
     name, _, commit = (r.get("display_title") or "").rpartition(" ")
     if name != builder or len(commit) != 40 or any(ch not in "0123456789abcdef" for ch in commit):
         return None
-    return _run(builder, r, commit, backfill=True)
+    return _run(builder, r, commit, backfill=True)   # tree_status checks head_sha is on main
 
 
 def _run(builder: str, r: dict, commit: str, backfill: bool = False) -> BuilderRun:
     return BuilderRun(
-        builder=builder, commit=commit, backfill=backfill, status=r.get("status") or "",
+        builder=builder, commit=commit, backfill=backfill, head_sha=r.get("head_sha", ""),
+        status=r.get("status") or "",
         conclusion=r.get("conclusion") or "", id=str(r["id"]), attempt=int(r.get("run_attempt") or 1),
         url=r.get("html_url", ""),
         finished_at=r.get("updated_at", "") if r.get("status") == "completed" else "")

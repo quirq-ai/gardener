@@ -29,14 +29,32 @@ def parse_time(s: str) -> datetime:
 def latest_runs(runs: Iterable[BuilderRun]) -> dict[tuple[str, str], BuilderRun]:
     """(builder, commit) -> the run that counts: the newest run, and within it the newest attempt.
     A re-run replaces its first try, as GitHub shows it; a later run of the same commit (pushed
-    again) replaces an older one."""
-    out: dict[tuple[str, str], BuilderRun] = {}
+    again, or backfilled) replaces an older one, except that a cancelled run never hides an
+    older verdict (a person may re-run a push run after its backfill was cancelled)."""
+    newest: dict[tuple[str, str], BuilderRun] = {}
+    verdict: dict[tuple[str, str], BuilderRun] = {}
+    order = lambda r: (_id_key(r.id), r.attempt)   # noqa: E731
     for r in runs:
         key = (r.builder, r.commit)
-        cur = out.get(key)
-        if cur is None or (_id_key(r.id), r.attempt) > (_id_key(cur.id), cur.attempt):
-            out[key] = r
-    return out
+        if key not in newest or order(r) > order(newest[key]):
+            newest[key] = r
+        if r.state in (RunState.GREEN, RunState.RED) and (key not in verdict or order(r) > order(verdict[key])):
+            verdict[key] = r
+    return {k: (verdict.get(k, r) if r.state is RunState.CANCELLED else r) for k, r in newest.items()}
+
+
+def from_main(runs: Iterable[BuilderRun], commits: Sequence[Commit]) -> tuple[list[BuilderRun], int]:
+    """Drop backfill runs that did not run from main at or after their commit. A dispatch names its
+    commit in its run-name, so one run from any other ref (a tag named `main`, say, with an edited
+    workflow) could otherwise forge a verdict on any main commit."""
+    age = {c.sha: i for i, c in enumerate(commits)}      # newest first
+    kept, dropped = [], 0
+    for r in runs:
+        if r.backfill and not (r.head_sha in age and r.commit in age and age[r.head_sha] <= age[r.commit]):
+            dropped += 1
+            continue
+        kept.append(r)
+    return kept, dropped
 
 
 def _id_key(run_id: str) -> tuple[int, str]:
@@ -76,6 +94,9 @@ def tree_status(repo: str, branch: str, builders: Sequence[str], commits: Sequen
         return TreeStatus(repo=repo, branch=branch, head=head, state=TreeState.UNKNOWN,
                           reason="infra-config defines no post-submit builder for this repo",
                           notes=notes)
+    runs, dropped = from_main(runs, commits)
+    if dropped:
+        notes.append(f"ignored {dropped} dispatched run(s) that did not run from {branch}")
     latest = latest_runs(runs)
     grid = {(b, c.sha): state_of(c, b, latest, now, grace) for b in builders for c in commits}
 
@@ -103,7 +124,8 @@ def tree_status(repo: str, branch: str, builders: Sequence[str], commits: Sequen
         state, reason = TreeState.UNKNOWN, "no post-submit verdict yet from " + ", ".join(waiting)
 
     return TreeStatus(repo=repo, branch=branch, head=head, state=state.value, reason=reason,
-                      builders=statuses, red=red, coverage=coverage(builders, commits, grid, latest),
+                      builders=statuses, red=red,
+                      coverage=coverage(builders, commits, grid, latest, runs),
                       notes=notes)
 
 
@@ -127,17 +149,20 @@ def _red_span(builder: str, commits: Sequence[Commit], grid: dict, latest: dict)
     suspects = list(reversed(window[window.index(first_bad):]))
     return RedSpan(builder=builder, first_bad=first_bad, latest_bad=latest_bad, last_good=last_good,
                    suspects=suspects, url=latest[(builder, first_bad)].url,
-                   first_bad_attempt=latest[(builder, first_bad)].attempt)
+                   first_bad_attempt=latest[(builder, first_bad)].attempt,
+                   first_bad_backfill=latest[(builder, first_bad)].backfill)
 
 
 def coverage(builders: Sequence[str], commits: Sequence[Commit], grid: dict,
-             latest: dict) -> Coverage:
-    """Commits from the oldest one with any post-submit run (onboarding) to the head."""
-    ran = [i for i, c in enumerate(commits) if any((b, c.sha) in latest for b in builders)]
+             latest: dict, runs: Iterable[BuilderRun] = ()) -> Coverage:
+    """Commits from the oldest one with a push-triggered post-submit run (onboarding) to the head.
+    Backfills never move that start: they fill holes after it."""
+    pushed = {(r.builder, r.commit) for r in runs if not r.backfill} if runs else set(latest)
+    ran = [i for i, c in enumerate(commits) if any((b, c.sha) in pushed for b in builders)]
     if not ran:
         return Coverage()
     oldest = max(ran)
-    missing, cancelled, pending, retried = [], [], [], []
+    missing, cancelled, pending, retried, backfilling = [], [], [], [], []
     for c in commits[:oldest + 1]:
         for b in builders:
             s = grid[(b, c.sha)]
@@ -149,5 +174,7 @@ def coverage(builders: Sequence[str], commits: Sequence[Commit], grid: dict,
                     retried.append(f"{c.sha} {b}")
             elif s is RunState.PENDING:
                 pending.append(f"{c.sha} {b}")
+                if (b, c.sha) in latest and latest[(b, c.sha)].backfill:
+                    backfilling.append(f"{c.sha} {b}")
     return Coverage(since=commits[oldest].sha, commits=oldest + 1, missing=missing,
-                    cancelled=cancelled, pending=pending, retried=retried)
+                    cancelled=cancelled, pending=pending, retried=retried, backfilling=backfilling)
