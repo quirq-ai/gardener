@@ -8,13 +8,18 @@ version = "0.1.0"
 description = "The quirq infra (qq) gardener: keeps main green with tree status, bisection and capped reverts."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+# jsonschema: qqcfg validate (infra-config's loader, imported from the pinned checkout).
+dependencies = ["jsonschema==4.26.0"]
 
 [project.optional-dependencies]
 test = ["pytest==9.1.1"]
+
+[project.scripts]
+qqgarden = "qqgarden.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]

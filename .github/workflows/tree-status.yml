@@ -1,0 +1,72 @@
+# Tree status and red detection (V0-GAR-01). Reads every onboarded repo's main history and its
+# post-submit runs, and publishes one status per repo to this repo's `tree-status` branch:
+#   status/<repo>.json  (schema qq-tree-status/1: open, closed or unknown, with regression ranges)
+#   status/README.md    (the same as a table)
+# It commits only when a status changes, so the branch history is the tree's open/close log.
+# The job fails when a main commit since onboarding has no post-submit result (GAR-01 done-when).
+name: tree-status
+on:
+  schedule:
+    - cron: "4-59/10 * * * *"   # every 10 min, off the hour: GitHub delays on-the-hour schedules
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: tree-status            # one writer to the tree-status branch at a time
+  cancel-in-progress: false
+jobs:
+  tree-status:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write           # push to this repo's tree-status branch only
+      actions: read             # read the onboarded repos' post-submit runs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: read the infra-config pin
+        id: pin
+        run: python -c "import tomllib; print('commit=' + tomllib.load(open('pins.toml', 'rb'))['infra-config']['commit'])" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: quirq-ai/infra-config
+          ref: ${{ steps.pin.outputs.commit }}
+          path: .qq/infra-config
+          persist-credentials: false
+      - run: python -m pip install --quiet .
+      - name: open the tree-status branch
+        run: |
+          if git fetch --depth 1 origin tree-status; then
+            git worktree add -B tree-status .qq/publish FETCH_HEAD
+          else
+            git worktree add --orphan -b tree-status .qq/publish
+          fi
+      - name: compute the tree status
+        id: status
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          rc=0
+          qqgarden status --config .qq/infra-config --out .qq/publish/status --require-coverage \
+            > "$RUNNER_TEMP/summary.md" || rc=$?
+          cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          [ "$rc" -le 1 ] || exit "$rc"      # 2 is a gardener error: nothing to publish
+      - name: publish changes
+        working-directory: .qq/publish
+        run: |
+          git add -A
+          if git diff --cached --quiet; then echo "no change"; exit 0; fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "tree-status: $(python3 -c 'import json,glob; print(", ".join(f"{d[\"repo\"]} {d[\"state\"]}" for d in (json.load(open(p)) for p in sorted(glob.glob("status/*.json")))))')"
+          git push origin tree-status
+      - name: every main commit has a post-submit result (V0-GAR-01 done-when)
+        if: steps.status.outputs.rc != '0'
+        run: |
+          echo "::error::a main commit since onboarding has no post-submit result; see the summary"
+          exit 1

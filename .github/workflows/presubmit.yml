@@ -19,5 +19,21 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.14"
+      - name: read the infra-config pin
+        id: pin
+        run: python -c "import tomllib; print('commit=' + tomllib.load(open('pins.toml', 'rb'))['infra-config']['commit'])" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: quirq-ai/infra-config
+          ref: ${{ steps.pin.outputs.commit }}
+          path: .qq/infra-config
+          persist-credentials: false
       - run: python -m pip install --quiet -e ".[test]"
       - run: python -m pytest -q -p no:cacheprovider
+      - name: every main commit has a post-submit result (V0-GAR-01 done-when, offline half)
+        run: |
+          qqgarden status --config .qq/infra-config --backend snapshot \
+            --snapshot tests/fixtures/every-commit.json --now 2026-10-04T12:00:00+00:00 --require-coverage
+          rc=0; qqgarden status --config .qq/infra-config --backend snapshot \
+            --snapshot tests/fixtures/batched-push.json --now 2026-10-04T12:00:00+00:00 --require-coverage || rc=$?
+          [ "$rc" -eq 1 ] || { echo "::error::a main commit without a post-submit result was not caught (exit $rc)"; exit 1; }
