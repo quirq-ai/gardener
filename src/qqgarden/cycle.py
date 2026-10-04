@@ -3,6 +3,9 @@ group with a verified culprit, create a clean revert within the caps.
 
     observe (GAR-01) -> group (GAR-02) -> culprit -> decide (policy) -> revert -> ledger -> PR
 
+It also backfills coverage (GAR-01): a main commit that a batched push skipped, or whose run was
+cancelled, gets its post-submit dispatched, so every commit ends with a result.
+
 Which commit is the culprit:
 - a regression range of one commit (its parent has a green verdict) names it directly. It is
   verified once a re-run of that commit's post-submit is red again (a later red commit proves
@@ -35,7 +38,8 @@ class Outcome:
     repo: str
     group: str
     kind: str
-    step: str                  # reverted, proposed, refused, stuck, needs-bisect, awaiting-verification, dry-run, error
+    step: str                  # reverted, proposed, refused, stuck, needs-bisect, awaiting-verification,
+                               # backfilled, needs-person, dry-run, error
     reason: str
     culprit: str = ""
     revert: str = ""           # PR URL
@@ -81,6 +85,48 @@ def verified(spans: list[RedSpan]) -> bool:
     return bool(spans) and all(s.last_good and s.first_bad_attempt > 1 for s in spans)
 
 
+# TODO(expert): a config value; backfills in flight per repo, so a long batched history fills in
+# over a few cycles instead of flooding the runners.
+BACKFILL_PER_CYCLE = 10
+
+
+def backfill(repo: Repo, status: TreeStatus, commits: list[Commit], backend, dry_run: bool) -> list[Outcome]:
+    """Dispatch the post-submit for each hole in coverage, oldest first. A run cancelled again
+    after a backfill is left to a person, so nothing retries forever."""
+    cov = status.coverage
+    base = dict(repo=repo.name, group="coverage", kind="")
+    out = []
+    if cov.retried:
+        out.append(Outcome(**base, step="needs-person",
+                           reason="cancelled again after a backfill: " + ", ".join(cov.retried)))
+    holes = [h for h in cov.missing + cov.cancelled if h not in cov.retried]
+    room = BACKFILL_PER_CYCLE - len(cov.backfilling)
+    if not holes or room <= 0:
+        return out
+    age = {c.sha: i for i, c in enumerate(commits)}   # newest first, so oldest has the largest index
+    holes = sorted(holes, key=lambda h: -age.get(h.split(" ", 1)[0], 0))[:room]
+    forge = backend.forge
+    problem = "dry run" if dry_run else ("no forge" if forge is None else forge.identity_problem())
+    if problem:
+        return out + [Outcome(**base, step="dry-run" if dry_run else "refused",
+                              reason=f"would backfill {len(holes)}: {problem}")]
+    done, failed = [], set()
+    for h in holes:
+        sha, builder = h.split(" ", 1)
+        if builder in failed:      # one builder's broken dispatch never stops the others'
+            continue
+        try:
+            forge.backfill(repo, builder, sha)
+        except GardenerError as e:
+            out.append(Outcome(**base, step="error", reason=f"backfilling {h}: {e}"))
+            failed.add(builder)
+            continue
+        done.append(h)
+    if done:
+        out.append(Outcome(**base, step="backfilled", reason="dispatched " + ", ".join(done)))
+    return out
+
+
 def run(cfg: dict, repos: list[Repo], backend, ledger: Ledger, policy: Policy, now: datetime,
         grace: timedelta, limit: int, evidence=None, dry_run: bool = False,
         records=None) -> list[Outcome]:
@@ -90,6 +136,7 @@ def run(cfg: dict, repos: list[Repo], backend, ledger: Ledger, policy: Policy, n
     out: list[Outcome] = []
     for repo in repos:
         status, commits = postsubmit.observe(backend, repo, limit, now, grace)
+        out += backfill(repo, status, commits, backend, dry_run)
         out += handle_repo(cfg, repo, status, commits, backend, ledger, policy, now, evidence, dry_run)
     if records is not None and not dry_run:
         out += follow_up(repos, backend, ledger, records, now)
@@ -174,6 +221,11 @@ def handle_group(cfg, repo: Repo, g, status: TreeStatus, by_sha: dict, backend, 
                        reason=f"{len(g.suspects)} suspects; bisect them with `qqgarden bisect`")
     spans = [s for s in status.red if (s.last_good, s.first_bad) == (g.last_good, g.first_bad)]
     culprit = by_sha[g.first_bad]
+    if any(s.first_bad_backfill for s in spans):
+        # A backfill runs main's newer workflow on the old commit, so its red may be the workflow's.
+        return Outcome(**base, culprit=culprit.sha, step="needs-bisect",
+                       reason="the first red is a backfill run (newer workflow on an older commit); "
+                              "confirm with `qqgarden bisect`")
     if policy.require_culprit_verification and not verified(spans):
         reason = "red once; waiting for a re-run of its post-submit to be red again"
         if not dry_run and backend.forge and not backend.forge.identity_problem():
