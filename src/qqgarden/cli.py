@@ -37,11 +37,11 @@ def statuses(args) -> list[TreeStatus]:
         repos = [r for r in repos if r.name in args.repo]
     cancellable = set(config.cancellable(cfg))
     backend = _backend(args, cfg)
-    now = datetime.fromisoformat(args.now) if args.now else datetime.now(timezone.utc)
+    now = postsubmit.parse_time(args.now) if args.now else datetime.now(timezone.utc)
     out = []
     for repo in repos:
         notes = [f"{b}: config lets a newer commit cancel it (set cancel_in_progress = false)"
-                 for b in repo.postsubmit if b in cancellable]
+                 for b in repo.postsubmit if f"{repo.name}/{b}" in cancellable]
         commits = backend.commits(repo, args.limit)
         runs = []
         for b in repo.postsubmit:
@@ -121,6 +121,9 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except GardenerError as e:
         print(f"qqgarden: {e}", file=sys.stderr)
+        return 2
+    except Exception as e:  # never let a crash look like exit 1, which means "coverage hole"
+        print(f"qqgarden: internal error: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
 

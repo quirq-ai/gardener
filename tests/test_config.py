@@ -17,4 +17,4 @@ def test_no_postsubmit_builder_is_cancellable(cfg):
 def test_cancellable_builder_is_reported(cfg):
     b = next(b for b in cfg["pipelines"]["builder"] if b["pipeline"] == "postsubmit")
     del b["cancel_in_progress"]
-    assert b["name"] in config.cancellable(cfg)
+    assert f'{b["repo"]}/{b["name"]}' in config.cancellable(cfg)

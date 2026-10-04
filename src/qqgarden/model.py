@@ -47,7 +47,10 @@ CONCLUSIONS = {
 @dataclass(frozen=True)
 class Commit:
     sha: str
-    landed_at: str          # RFC 3339 UTC: when it reached the branch (committer date)
+    # RFC 3339 UTC: the committer date, which is when it reached the branch for a squash or merge
+    # commit made by the forge. TODO(expert): a fast-forward push of old commits starts their grace
+    # period early; the push time would need the backend's event log.
+    landed_at: str
     title: str = ""
 
 

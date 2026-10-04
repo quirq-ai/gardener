@@ -61,9 +61,16 @@ jobs:
         run: |
           git add -A
           if git diff --cached --quiet; then echo "no change"; exit 0; fi
+          msg=$(python3 - <<'PY'
+          import glob, json
+          states = [json.load(open(p)) for p in sorted(glob.glob("status/*.json"))]
+          print(", ".join(f"{d['repo']} {d['state']}" for d in states))
+          PY
+          )
+          [ -n "$msg" ] || { echo "::error::no status files to describe"; exit 1; }
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -q -m "tree-status: $(python3 -c 'import json,glob; print(", ".join(f"{d[\"repo\"]} {d[\"state\"]}" for d in (json.load(open(p)) for p in sorted(glob.glob("status/*.json")))))')"
+              commit -q -m "tree-status: $msg"
           git push origin tree-status
       - name: every main commit has a post-submit result (V0-GAR-01 done-when)
         if: steps.status.outputs.rc != '0'

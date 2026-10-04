@@ -115,3 +115,16 @@ def test_json_round_trip():
     s = status("gmmrrp")
     assert TreeStatus.from_dict(s.to_dict()) == s
     assert s.to_json() == TreeStatus.from_dict(s.to_dict()).to_json()
+
+
+def test_a_later_run_of_the_same_commit_wins_over_an_older_rerun():
+    from qqgarden.model import BuilderRun
+    from qqgarden.postsubmit import latest_runs
+    old = BuilderRun(B, sha(1), "completed", "failure", "100", 2)
+    new = BuilderRun(B, sha(1), "completed", "success", "200", 1)
+    assert latest_runs([old, new])[(B, sha(1))] is new
+
+
+def test_naive_time_is_utc():
+    from qqgarden.postsubmit import parse_time
+    assert parse_time("2026-10-04T12:00:00") == NOW

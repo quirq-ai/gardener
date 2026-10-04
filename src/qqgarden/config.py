@@ -77,7 +77,7 @@ def repos(cfg: dict) -> list[Repo]:
         out.append(Repo(
             name=r["name"],
             source=r["source"],
-            default_branch=r.get("default_branch", "main"),
+            default_branch=r["default_branch"],     # required by infra-config's repos schema
             postsubmit=tuple(b["name"] for b in post),
             timeout_minutes=max((t for t in timeouts if t), default=0),
         ))
@@ -87,5 +87,6 @@ def repos(cfg: dict) -> list[Repo]:
 def cancellable(cfg: dict) -> list[str]:
     """Post-submit builders that config lets a newer commit cancel. Each one breaks GAR-01's
     promise that every main commit gets a verdict, so culprits stay findable."""
-    return [b["name"] for b in cfg.get("pipelines", {}).get("builder", [])
-            if b.get("pipeline") == "postsubmit" and b.get("cancel_in_progress", True) is not False]
+    # Only an explicit `cancel_in_progress = false` counts: config that says nothing promises nothing.
+    return [f'{b.get("repo")}/{b["name"]}' for b in cfg.get("pipelines", {}).get("builder", [])
+            if b.get("pipeline") == "postsubmit" and b.get("cancel_in_progress") is not False]

@@ -21,17 +21,20 @@ from qqgarden.model import (BuilderRun, BuilderStatus, Commit, Coverage, RedSpan
 
 
 def parse_time(s: str) -> datetime:
-    return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
+    """RFC 3339; a time without an offset is taken as UTC."""
+    t = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    return (t if t.tzinfo else t.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
 
 
 def latest_runs(runs: Iterable[BuilderRun]) -> dict[tuple[str, str], BuilderRun]:
-    """(builder, commit) -> the run that counts: the newest attempt. A re-run replaces its first try,
-    as GitHub shows it."""
+    """(builder, commit) -> the run that counts: the newest run, and within it the newest attempt.
+    A re-run replaces its first try, as GitHub shows it; a later run of the same commit (pushed
+    again) replaces an older one."""
     out: dict[tuple[str, str], BuilderRun] = {}
     for r in runs:
         key = (r.builder, r.commit)
         cur = out.get(key)
-        if cur is None or (r.attempt, _id_key(r.id)) > (cur.attempt, _id_key(cur.id)):
+        if cur is None or (_id_key(r.id), r.attempt) > (_id_key(cur.id), cur.attempt):
             out[key] = r
     return out
 
