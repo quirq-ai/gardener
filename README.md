@@ -151,10 +151,12 @@ failure group it finds a culprit, and reverts it if the caps allow:
   last slot. A missing `ledger` branch stops the cycle once the App exists (until then it only
   reports); a person starts the first one with a manual run and `bootstrap-ledger`, which pushes
   an empty start commit. The tree-status chain would replace that queued run, so: set the repo
-  variable `QQ_TREE_STATUS_CHAIN` to `off`, wait until no tree-status run is in progress, run the
-  workflow with `bootstrap-ledger`, and when it has finished delete the variable and run the
-  workflow once more without it to restart the chain. TODO(suraj): rulesets on `ledger` and `tree-status` (no deletion or
-  force push), asked of gate.
+  variable `QQ_TREE_STATUS_CHAIN` to `off`; wait at least 5 minutes, until no tree-status run is
+  in progress or queued; run the workflow with `bootstrap-ledger`; check that the run was not
+  cancelled (a push or cron run can still replace it) and that the `ledger` branch exists, and run
+  it again if not; then delete the variable and run the workflow once more without it to restart
+  the chain.
+  TODO(suraj): rulesets on `ledger` and `tree-status` (no deletion or force push), asked of gate.
 - **Titles.** Revert PRs and commits are titled `Revert <sha12> (qq gardener)`; the culprit's own
   title appears only as inline code in the body, so it cannot mention, link or close anything.
 - **Identity.** Revert PRs, re-runs and backfills use a short-lived installation token of the

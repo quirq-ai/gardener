@@ -54,10 +54,13 @@ def test_each_run_on_main_dispatches_the_next():
     assert "if: ${{ !cancelled() && github.ref == 'refs/heads/main' && vars.QQ_TREE_STATUS_CHAIN != 'off' }}" in job
     assert "environment: tree-status-tick" in job and "needs: [tree-status, cycle]" in job
     # nothing steers it: no inputs of any form, and only this job can dispatch
-    assert not re.search(r"\s(-f|-F|--field|--raw-field|--json)\b", job) and "inputs." not in job
-    assert len(re.findall(r"^ +actions: write", WORKFLOW, re.M)) == 1
-    # the cron stays as the backstop that restarts a stopped chain
-    assert re.search(r'^  schedule:\n(?:    #.*\n)*    - cron: "', WORKFLOW, re.M)
+    assert not re.search(r"\s(-[fF]|--field|--raw-field|--json|--input)", job) and "inputs." not in job
+    assert job.count("--ref") == 1
+    code = "\n".join(line.split(" #")[0] for line in WORKFLOW.splitlines() if not line.lstrip().startswith("#"))
+    assert "write-all" not in code
+    assert len(re.findall(r"(?<![\w-])actions\s*:\s*[\"']?write", code)) == 1
+    # the 5-minute cron stays as the backstop that restarts a stopped chain
+    assert re.search(r'^  schedule:\n(?:    #.*\n)*    - cron: "2-59/5 \* \* \* \*"$', WORKFLOW, re.M)
     assert re.search(r"permissions:\n      actions: write  ", job) and "contents:" not in job
     assert "gh workflow run tree-status.yml" in job and "--ref refs/heads/main" in job
     assert "for try in 1 2 3" in job and "270 - " in job   # retried; delay counted from the run's start
