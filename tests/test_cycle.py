@@ -142,13 +142,21 @@ def revert_args(config_root, snap, led, culprit, *extra):
             *extra]
 
 
+def bisect_range(tmp_path):
+    """Commit 4 (the break's parent) never ran, so the red range is 3..5: two suspects to bisect."""
+    xo = build(tmp_path)
+    parent = xo["commits"][2]["sha"]
+    xo["runs"] = [r for r in xo["runs"] if r["commit"] != parent]
+    return xo
+
+
 def bisected(culprit, parent, verified=True):
     return json.dumps({"culprit": culprit, "verified": verified,
                        "probes": [[culprit, "fail"], [culprit, "fail"], [parent, "pass"]]})
 
 
 def test_cli_revert_needs_a_verified_bisect_of_this_culprit(config_root, tmp_path, capsys, monkeypatch):
-    xo = build(tmp_path)
+    xo = bisect_range(tmp_path)
     culprit, parent = xo["commits"][1]["sha"], xo["commits"][2]["sha"]
     snap = snapshot(tmp_path, **{"xo-space": xo})
     led = shared_ledger(tmp_path)
@@ -183,7 +191,7 @@ def test_cli_revert_refuses_a_private_ledger(config_root, tmp_path, capsys):
 
 def test_cli_revert_refuses_a_ledger_that_is_not_the_shared_one(config_root, tmp_path, capsys):
     """A worktree of any other remote with a `ledger` branch is an empty ledger: refused."""
-    xo = build(tmp_path)
+    xo = bisect_range(tmp_path)
     culprit, parent = xo["commits"][1]["sha"], xo["commits"][2]["sha"]
     bj = tmp_path / "bisect.json"
     bj.write_text(bisected(culprit, parent))
@@ -440,7 +448,7 @@ def test_a_squashed_gardener_revert_is_still_recognised():
 def test_cli_revert_refuses_a_doctored_ledger_worktree(config_root, tmp_path, capsys, monkeypatch):
     """A local commit deleting reservations would survive the pull and empty the cap: refused."""
     from forgerepo import g
-    xo = build(tmp_path)
+    xo = bisect_range(tmp_path)
     culprit, parent = xo["commits"][1]["sha"], xo["commits"][2]["sha"]
     led = shared_ledger(tmp_path)
     monkeypatch.setattr(cli, "LEDGER_REMOTE", str(tmp_path / "ledger"))
@@ -453,4 +461,18 @@ def test_cli_revert_refuses_a_doctored_ledger_worktree(config_root, tmp_path, ca
     assert refused(args, capsys, "is not the published ledger branch")
     (led / "stray").write_text("x")
     assert refused(args, capsys, "uncommitted changes")
+    assert not (tmp_path / "forge").exists()
+
+
+def test_cli_revert_leaves_a_one_commit_range_to_the_cycle(config_root, tmp_path, capsys, monkeypatch):
+    """A hand-written bisection must not stand in for the cycle's run-based verification."""
+    xo = build(tmp_path)
+    culprit, parent = xo["commits"][1]["sha"], xo["commits"][2]["sha"]
+    led = shared_ledger(tmp_path)
+    monkeypatch.setattr(cli, "LEDGER_REMOTE", str(tmp_path / "ledger"))
+    bj = tmp_path / "bisect.json"
+    bj.write_text(bisected(culprit, parent))
+    args = revert_args(config_root, snapshot(tmp_path, **{"xo-space": xo}), led, culprit,
+                       "--publish-ledger", "ledger", "--bisect-json", str(bj))
+    assert refused(args, capsys, "for bisected ranges only")
     assert not (tmp_path / "forge").exists()

@@ -113,7 +113,8 @@ failure group it finds a culprit, and reverts it if the caps allow:
   PR ("stuck", for a person), never stops the rest of the cycle. A longer range needs `qqgarden bisect`,
   which runs the repo's code, so the cycle leaves it to the gardener agent, which then runs
   `qqgarden revert --culprit <sha> --bisect-json <bisect --json output> --ledger <ledger worktree>
-  --publish-ledger ledger`. That path keeps the cycle's rules: the culprit must be a suspect of a
+  --publish-ledger ledger`, for ranges of two or more commits only (a one-commit range is the
+  cycle's, verified on GitHub's runs). That path keeps the cycle's rules: the culprit must be a suspect of a
   red range now, the failure type comes from that range's runs, the bisection must name this
   culprit verified (a failing probe of it and a passing probe of its first parent), and the caps
   are counted on the freshly pulled shared ledger, a worktree of this repo. The bisection itself
