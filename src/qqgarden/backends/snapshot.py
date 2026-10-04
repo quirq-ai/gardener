@@ -44,17 +44,22 @@ class Backend:
                 newest[r["id"]] = r
         runs = []
         for r in newest.values():
-            run = BuilderRun(**r)
+            fields = {k: v for k, v in r.items() if k in BuilderRun.__dataclass_fields__}
+            run = BuilderRun(**fields)
             if run.running and run.attempt > 1:
                 prev = self.attempts(repo, run.url, run.attempt - 1)
-                run = BuilderRun(**{**r, "prior": prev[-1] if prev else ""})
+                run = BuilderRun(**{**fields, "prior": prev[-1][0] if prev else ""})
             runs.append(run)
         return runs, "" if runs else f"the snapshot has no {builder} runs"
 
-    def attempts(self, repo: Repo, run_url: str, upto: int) -> list[str]:
+    def attempts(self, repo: Repo, run_url: str, upto: int) -> list[tuple[str, str]]:
         by = {r.get("attempt", 1): r for r in self._repo(repo).get("runs", []) if r.get("url") == run_url}
-        return [(by.get(n, {}).get("conclusion") or "") if by.get(n, {}).get("status", "completed")
-                == "completed" else "" for n in range(1, upto + 1)]
+        out = []
+        for n in range(1, upto + 1):
+            r = by.get(n, {})
+            done = r.get("status", "completed") == "completed"
+            out.append(((r.get("conclusion") or "") if done else "", r.get("started_at", "")))
+        return out
 
     def failed_steps(self, repo: Repo, run_url: str) -> list[str]:
         return list(self._repo(repo).get("failed_steps", {}).get(run_url, []))

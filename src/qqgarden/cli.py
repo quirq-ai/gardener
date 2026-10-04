@@ -196,12 +196,26 @@ def cmd_cycle(args) -> int:
     return 0
 
 
+# The one shared ledger: this repo's `ledger` branch. `revert` counts its caps there and nowhere else.
+LEDGER_REMOTE = "https://github.com/quirq-ai/gardener"
+
+
+def _check_shared_ledger(root: Path) -> None:
+    from qqgarden import git
+    url = git.run(["remote", "get-url", "origin"], cwd=root, check=False).stdout.strip()
+    if url.removesuffix("/").removesuffix(".git") != LEDGER_REMOTE:
+        raise GardenerError(f"--ledger must be a worktree of {LEDGER_REMOTE} (its `{LEDGER_BRANCH}` branch), "
+                            f"whose origin is {url or 'unset'}; the caps are counted on that shared ledger only")
+
+
 def cmd_revert(args) -> int:
     """Revert a culprit that bisection named (the gardener agent's path for longer ranges), under
     exactly the cycle's rules: the culprit must be a suspect of a current red regression range,
     the failure type comes from that range's own runs (never from the caller or the results store),
-    verification is the `qqgarden bisect --json` result for this culprit, and the caps are counted
-    on the shared, freshly pulled `ledger` branch."""
+    verification is the `qqgarden bisect --json` result for this culprit (a failing probe of it, a
+    passing probe of its first parent), and the caps are counted on the shared, freshly pulled
+    `ledger` branch of LEDGER_REMOTE. The bisection itself stays attested by the agent that ran it:
+    its probe command is the agent's choice, so this path is for the gardener agent only."""
     from qqgarden import cycle
     from qqgarden.ledger import Ledger
     from qqgarden.policy import Policy
@@ -234,11 +248,18 @@ def cmd_revert(args) -> int:
             res = json.loads(Path(args.bisect_json).read_text()) if args.bisect_json else {}
         except (OSError, ValueError) as e:
             raise GardenerError(f"--bisect-json: {e}") from None
-        verified = res.get("culprit") == culprit.sha and res.get("verified") is True
+        idx = next(i for i, c in enumerate(commits) if c.sha == culprit.sha)
+        parent = commits[idx + 1].sha if idx + 1 < len(commits) else ""
+        probes = [tuple(p) for p in res.get("probes", []) if isinstance(p, list) and len(p) == 2]
+        verified = (res.get("culprit") == culprit.sha and res.get("verified") is True
+                    and (culprit.sha, "fail") in probes and bool(parent) and (parent, "pass") in probes)
         if not verified:
             raise GardenerError("auto_revert.toml requires a verified culprit: pass --bisect-json with "
-                                f"the `qqgarden bisect --json` output that names {culprit.sha[:12]} verified")
+                                f"the `qqgarden bisect --json` output that names {culprit.sha[:12]} verified, "
+                                "with a failing probe of it and a passing probe of its first parent")
     ledger = Ledger(Path(args.ledger), args.publish_ledger)
+    if not args.dry_run:
+        _check_shared_ledger(Path(args.ledger))
     ledger.refresh()
     o = cycle.revert_culprit(cfg, repo, g, culprit, backend, ledger, policy, now, args.dry_run, verified=verified,
                              status=status, order={c.sha: i for i, c in enumerate(commits)})

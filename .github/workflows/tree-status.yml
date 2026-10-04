@@ -17,8 +17,8 @@
 # do and creates nothing.
 # It runs no code from the repos it gardens, only `git revert`. Next to its write tokens it runs
 # only this repo's code and qqresults (pins.toml) from source, plus requirements/runtime.lock
-# (exact versions, hash-checked wheels). No checkout keeps credentials: each push step gets the
-# job token for this repo alone, in that step's environment.
+# (exact versions, hash-checked wheels). No checkout keeps credentials: only the steps that push
+# (or read runs and write issues through the API) get the job token, in their own environment.
 #
 # The ledger is the cap's memory, so a missing `ledger` branch is an error, never an empty ledger.
 # The first run starts it by hand: Actions > tree-status > Run workflow, with bootstrap-ledger.
@@ -194,17 +194,34 @@ jobs:
           permission-pull-requests: write   # revert PRs, auto-merge once auto_land_repos allows
           permission-actions: write         # re-runs that verify a culprit, backfill dispatches
       - name: open the ledger branch
+        id: ledger
         env:
           BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap-ledger }}
+          TOKEN: ${{ github.token }}
         run: |
           # Start an empty ledger only when the branch does not exist and a person asked for it: an
           # empty ledger after a fetch error or a deletion would count zero reverts.
+          [ "$(git remote get-url origin)" = "https://github.com/${GITHUB_REPOSITORY}" ] \
+            || { echo "::error::unexpected origin $(git remote get-url origin)"; exit 1; }
           rc=0; git ls-remote --exit-code --heads origin ledger > /dev/null || rc=$?
           if [ "$rc" -eq 0 ]; then
             git fetch --depth 50 origin ledger
             git worktree add -B ledger .qq/ledger FETCH_HEAD
+            echo "publish=ledger" >> "$GITHUB_OUTPUT"
           elif [ "$rc" -eq 2 ] && [ "$BOOTSTRAP" = "true" ]; then
             git worktree add --orphan -b ledger .qq/ledger
+            auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+            git -C .qq/ledger -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                commit -q --allow-empty -m "ledger: start (bootstrap-ledger by ${GITHUB_ACTOR})"
+            git -C .qq/ledger -c "http.https://github.com/${GITHUB_REPOSITORY}.extraheader=AUTHORIZATION: basic $auth" \
+                push origin HEAD:refs/heads/ledger
+            echo "publish=ledger" >> "$GITHUB_OUTPUT"
+          elif [ "$rc" -eq 2 ] && [ "$HAS_BOT" != "true" ]; then
+            # No App yet: the cycle can only report, so a scratch ledger that is never pushed will do.
+            echo "::warning::no ledger branch yet; reporting only until the App exists and bootstrap-ledger runs"
+            git worktree add --orphan -b ledger .qq/ledger
+            echo "publish=" >> "$GITHUB_OUTPUT"
           elif [ "$rc" -eq 2 ]; then
             echo "::error::no ledger branch: if it never existed, start it with a manual run and bootstrap-ledger;"\
                  "if it was deleted, restore it first (an empty ledger counts zero reverts)"; exit 1
@@ -215,12 +232,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           QQ_GARDENER_TOKEN: ${{ steps.bot.outputs.token }}   # the App's installation token
-          TOKEN: ${{ github.token }}
+          TOKEN: ${{ github.token }}          # ledger pushes; GITHUB_TOKEN above is for issues
         run: |
           set -o pipefail
           # The ledger's pushes: the job token, for this repo's URL only.
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/${GITHUB_REPOSITORY}.extraheader"
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
           unset TOKEN
-          python -m qqgarden.cli cycle --config .qq/infra-config --ledger .qq/ledger --publish-ledger ledger \
+          python -m qqgarden.cli cycle --config .qq/infra-config --ledger .qq/ledger \
+            --publish-ledger "${{ steps.ledger.outputs.publish }}" \
             | tee -a "$GITHUB_STEP_SUMMARY"

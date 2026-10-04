@@ -173,3 +173,21 @@ def test_green_names_the_newest_all_green_commit():
     assert status("ggrr").green == sha(2)
     assert status("gggp").green == sha(3)
     assert status("rr").green == ""
+
+
+def test_a_dispatch_from_its_own_commit_never_replaces_its_push_run():
+    """A red head re-dispatched from itself (green) stays red: the push run's verdict wins."""
+    from dataclasses import replace
+    commits, runs = history("gr")
+    runs.append(replace(runs[-1], id="9999", conclusion="success", backfill=True, head_sha=sha(2)))
+    s = tree_status("demo", "main", [B], commits, runs, NOW, GRACE)
+    assert s.state == TreeState.CLOSED
+
+
+def test_a_little_clock_skew_is_pending_not_a_hole():
+    from dataclasses import replace
+    commits, runs = history("gg")
+    commits[0] = replace(commits[0], landed_at=(NOW + timedelta(minutes=1)).isoformat())
+    runs = [r for r in runs if r.commit != commits[0].sha]
+    s = tree_status("demo", "main", [B], commits, runs, NOW, GRACE)
+    assert f"{commits[0].sha} {B}" in s.coverage.pending

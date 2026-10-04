@@ -142,19 +142,29 @@ def revert_args(config_root, snap, led, culprit, *extra):
             *extra]
 
 
-def test_cli_revert_needs_a_verified_bisect_of_this_culprit(config_root, tmp_path, capsys):
+def bisected(culprit, parent, verified=True):
+    return json.dumps({"culprit": culprit, "verified": verified,
+                       "probes": [[culprit, "fail"], [culprit, "fail"], [parent, "pass"]]})
+
+
+def test_cli_revert_needs_a_verified_bisect_of_this_culprit(config_root, tmp_path, capsys, monkeypatch):
     xo = build(tmp_path)
-    culprit = xo["commits"][1]["sha"]
+    culprit, parent = xo["commits"][1]["sha"], xo["commits"][2]["sha"]
     snap = snapshot(tmp_path, **{"xo-space": xo})
     led = shared_ledger(tmp_path)
+    monkeypatch.setattr(cli, "LEDGER_REMOTE", str(tmp_path / "ledger"))   # origin is ledger.git
     args = revert_args(config_root, snap, led, culprit, "--publish-ledger", "ledger")
     assert refused(args, capsys, "verified culprit")
     bj = tmp_path / "bisect.json"
-    bj.write_text(json.dumps({"culprit": xo["commits"][2]["sha"], "verified": True}))   # another commit
+    bj.write_text(bisected(parent, xo["commits"][3]["sha"]))                    # another commit
     assert refused(args + ["--bisect-json", str(bj)], capsys, "verified culprit")
-    bj.write_text(json.dumps({"culprit": culprit, "verified": False}))
+    bj.write_text(bisected(culprit, parent, verified=False))
     assert refused(args + ["--bisect-json", str(bj)], capsys, "verified culprit")
-    bj.write_text(json.dumps({"culprit": culprit, "verified": True}))
+    bj.write_text(json.dumps({"culprit": culprit, "verified": True}))              # no probes behind it
+    assert refused(args + ["--bisect-json", str(bj)], capsys, "verified culprit")
+    bj.write_text(bisected(culprit, xo["commits"][3]["sha"]))                     # not its parent
+    assert refused(args + ["--bisect-json", str(bj)], capsys, "verified culprit")
+    bj.write_text(bisected(culprit, parent))
     assert cli.main(args + ["--bisect-json", str(bj), "--json"]) == 0
     [o] = json.loads(capsys.readouterr().out)
     assert o["step"] == "proposed" and o["kind"] == "build"      # the kind came from the red run
@@ -171,12 +181,24 @@ def test_cli_revert_refuses_a_private_ledger(config_root, tmp_path, capsys):
         assert refused(args, capsys, "shared ledger")
 
 
+def test_cli_revert_refuses_a_ledger_that_is_not_the_shared_one(config_root, tmp_path, capsys):
+    """A worktree of any other remote with a `ledger` branch is an empty ledger: refused."""
+    xo = build(tmp_path)
+    culprit, parent = xo["commits"][1]["sha"], xo["commits"][2]["sha"]
+    bj = tmp_path / "bisect.json"
+    bj.write_text(bisected(culprit, parent))
+    args = revert_args(config_root, snapshot(tmp_path, **{"xo-space": xo}), shared_ledger(tmp_path), culprit,
+                       "--publish-ledger", "ledger", "--bisect-json", str(bj))
+    assert refused(args, capsys, "must be a worktree of https://github.com/quirq-ai/gardener")
+    assert not (tmp_path / "forge").exists()
+
+
 def test_cli_revert_refuses_a_commit_outside_a_red_range(config_root, tmp_path, capsys):
     xo = build(tmp_path)
     snap = snapshot(tmp_path, **{"xo-space": xo})
     green = xo["commits"][3]["sha"]                  # commit 3, before the break
     bj = tmp_path / "bisect.json"
-    bj.write_text(json.dumps({"culprit": green, "verified": True}))
+    bj.write_text(bisected(green, xo["commits"][4]["sha"]))
     args = revert_args(config_root, snap, shared_ledger(tmp_path), green,
                        "--publish-ledger", "ledger", "--bisect-json", str(bj))
     assert refused(args, capsys, "not a suspect")
@@ -381,3 +403,35 @@ def test_a_fetch_failure_is_infra_and_never_reverted(cfg, tmp_path):
     [o] = run_cycle(cfg, snapshot(tmp_path, **{"xo-space": xo}), tmp_path)
     assert o.step == "refused" and o.kind == "infra"
     assert not (tmp_path / "forge" / "prs").exists()
+
+
+def test_a_parent_rerun_from_before_the_break_does_not_verify(cfg, tmp_path):
+    """The parent's second green ran before the culprit first failed: it says nothing about now."""
+    from forgerepo import stamp
+    cfg["auto_revert"]["policy"]["auto_land_repos"] = ["xo-space"]
+    xo = build(tmp_path)
+    parent = xo["commits"][2]["sha"]
+    [rerun] = [r for r in xo["runs"] if r["commit"] == parent and r["attempt"] == 2]
+    rerun["started_at"] = stamp(NOW - timedelta(minutes=29))
+    [o] = run_cycle(cfg, snapshot(tmp_path, **{"xo-space": xo}), tmp_path)
+    assert o.step == "awaiting-verification" and rerun["url"] in o.reason
+
+
+def test_a_refused_rerun_goes_to_a_person(cfg, tmp_path):
+    from qqgarden.errors import GardenerError
+    cfg["auto_revert"]["policy"]["auto_land_repos"] = ["xo-space"]
+    xo = build(tmp_path, rerun_red=False)
+    backend = load("snapshot", path=snapshot(tmp_path, **{"xo-space": xo}), forge_dir=tmp_path / "forge")
+
+    def refuse(*a):
+        raise GardenerError("HTTP 403: run too old")
+    backend.forge.rerun = refuse
+    repos = [r for r in config.repos(cfg) if r.name == "xo-space"]
+    [o] = cycle.run(cfg, repos, backend, Ledger(tmp_path / "ledger"), Policy.from_config(cfg), NOW,
+                    timedelta(minutes=15), 100)
+    assert o.step == "needs-person" and "refused a re-run" in o.reason
+
+
+def test_a_squashed_gardener_revert_is_still_recognised():
+    assert cycle.GARDENER_REVERT.match("Revert 0123456789ab (qq gardener) (#45)")
+    assert not cycle.GARDENER_REVERT.match("Revert 0123456789ab (qq gardener) and more")

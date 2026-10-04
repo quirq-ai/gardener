@@ -31,19 +31,18 @@ def latest_runs(runs: Iterable[BuilderRun]) -> dict[tuple[str, str], BuilderRun]
     A re-run replaces its first try, as GitHub shows it; a later run of the same commit (pushed
     again, or backfilled) replaces an older one, except that a cancelled run never hides an
     older verdict (a person may re-run a push run after its backfill was cancelled)."""
-    pushed: dict[tuple[str, str], list[BuilderRun]] = {}
-    filled: dict[tuple[str, str], list[BuilderRun]] = {}
+    pools: tuple[dict, dict, dict] = ({}, {}, {})   # push runs, own-commit dispatches, other backfills
     for r in runs:
-        # A dispatch that ran from the commit itself is that commit's own verdict (a push that
-        # skipped CI, say); any other backfill only fills a hole the push runs left.
-        own = not r.backfill or r.head_sha == r.commit
-        (pushed if own else filled).setdefault((r.builder, r.commit), []).append(r)
+        # A dispatch that ran from the commit itself stands in for a push run that never came (a
+        # push that skipped CI, say); any other backfill only fills a hole. Neither ever replaces
+        # a push run's verdict.
+        tier = 0 if not r.backfill else 1 if r.head_sha == r.commit else 2
+        pools[tier].setdefault((r.builder, r.commit), []).append(r)
     out = {}
-    for key in pushed.keys() | filled.keys():
-        run = _pick(pushed.get(key, []))
-        if run is None or run.state in (RunState.CANCELLED, RunState.MISSING):
-            run = _pick(filled.get(key, [])) or run
-        out[key] = run
+    for key in set().union(*pools):
+        picks = [p for p in (_pick(pool.get(key, [])) for pool in pools) if p is not None]
+        out[key] = next((p for p in picks if p.state not in (RunState.CANCELLED, RunState.MISSING)),
+                        picks[-1])
     return out
 
 
@@ -78,14 +77,20 @@ def _id_key(run_id: str) -> tuple[int, str]:
     return (int(run_id), "") if run_id.isdigit() else (0, run_id)
 
 
+CLOCK_SKEW = timedelta(minutes=5)
+
+
 def state_of(commit: Commit, builder: str, runs: dict[tuple[str, str], BuilderRun],
              now: datetime, grace: timedelta) -> RunState:
     run = runs.get((builder, commit.sha))
     if run is not None:
         return run.state
     landed = parse_time(commit.landed_at)
-    # A committer date in the future is not when it landed; it must not stay pending forever.
-    return RunState.PENDING if landed <= now and now - landed < grace else RunState.MISSING
+    # A committer date in the future is not when it landed, and must not keep the commit pending
+    # forever: beyond a little clock skew it is a hole at once.
+    if landed > now + CLOCK_SKEW:
+        return RunState.MISSING
+    return RunState.PENDING if now - landed < grace else RunState.MISSING
 
 
 def observe(backend, repo, limit: int, now: datetime, grace: timedelta,

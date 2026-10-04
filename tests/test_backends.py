@@ -103,5 +103,16 @@ def test_github_reruns_failed_jobs_of_a_red_and_all_of_a_green(monkeypatch):
 def test_github_reads_every_attempt(monkeypatch):
     b = github.Backend(token="")
     got = {1: "failure", 2: "success"}
-    monkeypatch.setattr(b, "_get", lambda path: {"conclusion": got[int(path.rsplit("/", 1)[1])]})
-    assert b.attempts(REPO, "https://github.com/quirq-ai/demo/actions/runs/42", 2) == ["failure", "success"]
+    monkeypatch.setattr(b, "_get", lambda path: {"conclusion": got[int(path.rsplit("/", 1)[1])],
+                                                 "run_started_at": f"t{path.rsplit('/', 1)[1]}"})
+    assert b.attempts(REPO, "https://github.com/quirq-ai/demo/actions/runs/42", 2) == [
+        ("failure", "t1"), ("success", "t2")]
+
+
+def test_github_rerun_in_progress_keeps_its_last_verdict(monkeypatch):
+    from qqgarden.model import BuilderRun, RunState
+    b = github.Backend(token="")
+    monkeypatch.setattr(b, "_get", lambda path: {"conclusion": "failure", "run_started_at": "t"})
+    run = BuilderRun("demo-postsubmit", "c" * 40, "in_progress", "", "42", 2,
+                     "https://github.com/quirq-ai/demo/actions/runs/42")
+    assert b._with_prior(REPO, run).state is RunState.RED

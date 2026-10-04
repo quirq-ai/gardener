@@ -47,8 +47,8 @@ and those runs, and works out:
   oldest first, with at most 10 in flight per repo. A dispatched run's head is the branch tip, so
   it is matched by its run-name, `<builder> <commit>`, and counts only when it ran from a `main`
   commit at or after the one it names (checked in the backend, so every reader gets it). It only
-  fills a hole: a push run's verdict always wins over a backfill's, except that a dispatch run
-  from the commit itself is that commit's own verdict. A backfill runs main's newer workflow on the older commit,
+  fills a hole: a push run's verdict always wins over a backfill's. A dispatch run from the commit
+  itself stands in for a push run only when there is none (or it was cancelled). A backfill runs main's newer workflow on the older commit,
   so a red backfill never names a culprit by itself: the cycle asks for a bisection. A hole whose
   backfill was cancelled too is left for a person, and re-running its push run clears it.
   Dispatching needs the bot identity.
@@ -106,7 +106,8 @@ failure group it finds a culprit, and reverts it if the caps allow:
 - **Culprit.** A range of one commit (its parent is green) names it. It must be verified
   (`require_culprit_verification`) with and without it, for every builder in the group: the
   culprit's own post-submit run is red on its last two attempts and was never green, and its
-  parent's is green on its last two and was never red. A later red commit proves nothing (it may
+  parent's is green on its last two and was never red, the last of them started after the
+  culprit first failed. A later red commit proves nothing (it may
   be another break). Until then the cycle re-runs the culprit's failed jobs and the parent's whole
   run and waits; after 3 attempts without that, a person looks. A group that errors, or a revert branch left without a
   PR ("stuck", for a person), never stops the rest of the cycle. A longer range needs `qqgarden bisect`,
@@ -114,7 +115,9 @@ failure group it finds a culprit, and reverts it if the caps allow:
   `qqgarden revert --culprit <sha> --bisect-json <bisect --json output> --ledger <ledger worktree>
   --publish-ledger ledger`. That path keeps the cycle's rules: the culprit must be a suspect of a
   red range now, the failure type comes from that range's runs, the bisection must name this
-  culprit verified, and the caps are counted on the freshly pulled shared ledger.
+  culprit verified (a failing probe of it and a passing probe of its first parent), and the caps
+  are counted on the freshly pulled shared ledger, a worktree of this repo. The bisection itself
+  stays attested by the agent that ran it, whose probe command it chose.
 - **After a revert.** Once a revert is on main and the group is still red on it or later, a
   person looks ("still red after its revert"): another break may hide behind the first. The
   gardener never reverts its own revert (`Revert <sha12> (qq gardener)`).
@@ -139,8 +142,9 @@ failure group it finds a culprit, and reverts it if the caps allow:
   gardener only ever lands a PR it opened in the same run, at the revert commit it made
   (auto-merge pinned to that head). A reservation that decided to land counts against
   `submit_daily_limit` from the moment it is written, so two racing writers cannot both take the
-  last slot. A missing `ledger` branch stops the cycle; a person starts the first one with a manual
-  run and `bootstrap-ledger`. TODO(suraj): rulesets on `ledger` and `tree-status` (no deletion or
+  last slot. A missing `ledger` branch stops the cycle once the App exists (until then it only
+  reports); a person starts the first one with a manual run and `bootstrap-ledger`, which pushes
+  an empty start commit. TODO(suraj): rulesets on `ledger` and `tree-status` (no deletion or
   force push), asked of gate.
 - **Titles.** Revert PRs and commits are titled `Revert <sha12> (qq gardener)`; the culprit's own
   title appears only as inline code in the body, so it cannot mention, link or close anything.

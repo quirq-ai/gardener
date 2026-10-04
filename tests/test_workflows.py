@@ -42,10 +42,14 @@ def test_qqresults_runs_at_the_pinned_commit():
 
 def test_tokens_reach_only_the_steps_that_push():
     names = [re.match(r"name: (.*)", s).group(1) for s in steps_using(WORKFLOW, "${{ github.token }}")]
-    assert names == ["compute the tree status", "publish changes", "garden (group, verify, revert within caps)"]
+    assert names == ["compute the tree status", "publish changes", "open the ledger branch",
+                     "garden (group, verify, revert within caps)"]
 
 
 def test_an_empty_ledger_needs_a_person():
     [step] = steps_using(WORKFLOW, "name: open the ledger branch")
     assert "--orphan" in step and '[ "$BOOTSTRAP" = "true" ]' in step
     assert "inputs.bootstrap-ledger" in step and "github.event_name == 'workflow_dispatch'" in step
+    # a bootstrap really creates the branch; without the App the cycle reports on a scratch ledger
+    assert "commit -q --allow-empty" in step and "push origin HEAD:refs/heads/ledger" in step
+    assert '"$HAS_BOT" != "true"' in step and "publish=" in step

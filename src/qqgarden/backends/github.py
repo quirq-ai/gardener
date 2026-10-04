@@ -98,15 +98,15 @@ class Backend:
         if not r.running or r.attempt < 2:
             return r
         prev = self.attempts(repo, r.url, r.attempt - 1)
-        return dataclasses.replace(r, prior=prev[-1] if prev else "")
+        return dataclasses.replace(r, prior=prev[-1][0] if prev else "")
 
-    def attempts(self, repo: Repo, run_url: str, upto: int) -> list[str]:
-        """Each attempt's conclusion, 1..upto, oldest first ("" while one is running)."""
+    def attempts(self, repo: Repo, run_url: str, upto: int) -> list[tuple[str, str]]:
+        """Each attempt's (conclusion, run_started_at), 1..upto, oldest first ("" while running)."""
         run_id = _run_id(run_url)
         out = []
         for n in range(1, upto + 1):
-            doc = self._get(f"/repos/{repo.slug}/actions/runs/{run_id}/attempts/{n}") if run_id else None
-            out.append((doc or {}).get("conclusion") or "")
+            doc = (self._get(f"/repos/{repo.slug}/actions/runs/{run_id}/attempts/{n}") if run_id else None) or {}
+            out.append((doc.get("conclusion") or "", doc.get("run_started_at") or ""))
         return out
 
     def backfill(self, repo: Repo, builder: str, commit: str) -> None:
