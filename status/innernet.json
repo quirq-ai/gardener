@@ -16,6 +16,7 @@
     "retried": [],
     "since": "d31bc87798663f665f8e4d07be97a0633e560482"
   },
+  "green": "d31bc87798663f665f8e4d07be97a0633e560482",
   "head": "d31bc87798663f665f8e4d07be97a0633e560482",
   "notes": [],
   "reason": "every post-submit builder's newest verdict is green",
