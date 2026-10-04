@@ -1,0 +1,26 @@
+{
+  "branch": "main",
+  "builders": {
+    "xo-space-postsubmit": {
+      "commit": "",
+      "state": "none",
+      "url": ""
+    }
+  },
+  "coverage": {
+    "cancelled": [],
+    "commits": 0,
+    "missing": [],
+    "pending": [],
+    "since": ""
+  },
+  "head": "c3cea98c8e70479b1f0cb8f871e28f8f6ee5a4f6",
+  "notes": [
+    "qq-xo-space-postsubmit.yml is not in quirq-ai/xo-space: the post-submit workflow has not been delivered (infra-config `qqcfg deliver`)"
+  ],
+  "reason": "no post-submit verdict yet from xo-space-postsubmit",
+  "red": [],
+  "repo": "xo-space",
+  "schema": "qq-tree-status/1",
+  "state": "unknown"
+}
