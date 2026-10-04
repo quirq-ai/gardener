@@ -19,6 +19,9 @@ from qqgarden.errors import GardenerError
 from qqgarden.policy import Counts
 
 SCHEMA = "qq-revert/1"
+# Runners have no git identity; a rebase rewrites our commit, so it needs one as much as commit does.
+IDENTITY = ["-c", "user.name=github-actions[bot]",
+            "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com"]
 
 
 def revert_id(repo: str, culprit: str) -> str:
@@ -65,14 +68,18 @@ class Ledger:
         commit and raises, so the cap is judged on every record, not just ours."""
         rel = str(path.relative_to(self.root))
         git.run(["add", rel], cwd=self.root)
-        git.run(["-c", "user.name=github-actions[bot]",
-                 "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
-                 "commit", "--quiet", "-m", f"ledger: {rel}"], cwd=self.root)
+        git.run([*IDENTITY, "commit", "--quiet", "-m", f"ledger: {rel}"], cwd=self.root)
         for _ in range(3):   # another writer may have pushed; records never collide, so rebase is safe
             if git.run(["push", "--quiet", "origin", f"HEAD:{self.publish}"], cwd=self.root,
                        check=False).returncode == 0:
                 return
-            git.run(["pull", "--quiet", "--rebase", "origin", self.publish], cwd=self.root)
+            pulled = git.run([*IDENTITY, "pull", "--quiet", "--rebase", "origin", self.publish],
+                             cwd=self.root, check=False)
+            if pulled.returncode != 0:   # e.g. the same record written twice: leave the worktree clean
+                git.run(["rebase", "--abort"], cwd=self.root, check=False)
+                git.run(["reset", "--quiet", "--hard", "HEAD~1"], cwd=self.root)
+                raise GardenerError(f"could not rebase {rel} onto the {self.publish} branch: "
+                                    f"{pulled.stderr.strip()}; nothing was created")
             why = recheck() if recheck else ""
             if why:
                 git.run(["reset", "--quiet", "--hard", "HEAD~1"], cwd=self.root)

@@ -169,3 +169,25 @@ def test_a_concurrent_writer_taking_the_last_slot_wins(cfg, tmp_path):
                         created_at="2026-10-04T11:30:00Z"), recheck=recheck(b, "rb"))
     names = g(remote, "ls-tree", "-r", "--name-only", "ledger")
     assert "reverts/ra.json" in names and "reverts/rb.json" not in names
+
+
+def test_two_writers_saving_the_same_record_leave_a_clean_worktree(tmp_path):
+    from forgerepo import g
+    from qqgarden.errors import GardenerError
+    import pytest
+    remote = tmp_path / "ledger.git"
+    g(tmp_path, "init", "-q", "--bare", "-b", "ledger", str(remote))
+    g(tmp_path, "clone", "-q", str(remote), "seed")
+    Ledger(tmp_path / "seed", publish="ledger").reserve(
+        Entry(id="s", repo="innernet", culprit="0" * 40, kind="test", action="propose",
+              created_at="2026-10-04T11:00:00Z"))
+    g(tmp_path, "clone", "-q", "-b", "ledger", str(remote), "a")
+    g(tmp_path, "clone", "-q", "-b", "ledger", str(remote), "b")
+    a, b = Ledger(tmp_path / "a", publish="ledger"), Ledger(tmp_path / "b", publish="ledger")
+    a.reserve(Entry(id="r", repo="xo-space", culprit="a" * 40, kind="build", action="propose",
+                    created_at="2026-10-04T11:30:00Z"))
+    with pytest.raises(GardenerError, match="could not rebase"):
+        b.reserve(Entry(id="r", repo="xo-space", culprit="a" * 40, kind="build", action="land",
+                        created_at="2026-10-04T11:31:00Z"))
+    assert not (tmp_path / "b" / ".git" / "rebase-merge").exists()
+    assert g(tmp_path / "b", "status", "--porcelain") == ""
