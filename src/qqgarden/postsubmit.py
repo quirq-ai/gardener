@@ -51,6 +51,21 @@ def state_of(commit: Commit, builder: str, runs: dict[tuple[str, str], BuilderRu
     return RunState.PENDING if now - parse_time(commit.landed_at) < grace else RunState.MISSING
 
 
+def observe(backend, repo, limit: int, now: datetime, grace: timedelta,
+            notes: Sequence[str] = ()) -> tuple[TreeStatus, list[Commit]]:
+    """Read one repo through a backend and compute its tree status."""
+    notes = list(notes)
+    commits = backend.commits(repo, limit)
+    runs: list[BuilderRun] = []
+    for b in repo.postsubmit:
+        r, note = backend.runs(repo, b)
+        runs.extend(r)
+        if note:
+            notes.append(note)
+    return tree_status(repo.name, repo.default_branch, repo.postsubmit, commits, runs, now, grace,
+                       notes), list(commits)
+
+
 def tree_status(repo: str, branch: str, builders: Sequence[str], commits: Sequence[Commit],
                 runs: Iterable[BuilderRun], now: datetime, grace: timedelta,
                 notes: Sequence[str] = ()) -> TreeStatus:
@@ -111,7 +126,8 @@ def _red_span(builder: str, commits: Sequence[Commit], grid: dict, latest: dict)
     # the streak are red already, so they cannot be the first break.
     suspects = list(reversed(window[window.index(first_bad):]))
     return RedSpan(builder=builder, first_bad=first_bad, latest_bad=latest_bad, last_good=last_good,
-                   suspects=suspects, url=latest[(builder, first_bad)].url)
+                   suspects=suspects, url=latest[(builder, first_bad)].url,
+                   first_bad_attempt=latest[(builder, first_bad)].attempt)
 
 
 def coverage(builders: Sequence[str], commits: Sequence[Commit], grid: dict,

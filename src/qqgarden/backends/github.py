@@ -5,9 +5,16 @@ infra-config delivers each post-submit builder as `.github/workflows/qq-<builder
 commit are that workflow's `push` runs whose head is the commit.
 
 Reads need no token for public repos; GITHUB_TOKEN, when set, only raises the rate limit.
+
+Writes (revert branches and PRs, landing, re-runs) use QQ_GARDENER_TOKEN: a bot identity with
+contents, pull-requests and actions write on the onboarded repos. It cannot be the workflow's own
+GITHUB_TOKEN: a PR opened with that token starts no workflows, so the revert would never be gated.
+Without it the forge raises NoIdentity and the gardener only reports what it would do.
+TODO(suraj): create the bot identity (a GitHub App installed on quirq-ai) and its secret.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import urllib.error
@@ -18,6 +25,7 @@ from pathlib import Path
 from qqgarden import git
 from qqgarden.config import Repo
 from qqgarden.errors import GardenerError
+from qqgarden.forge import NoIdentity
 from qqgarden.model import BuilderRun, Commit
 
 API = "https://api.github.com"
@@ -28,9 +36,16 @@ def workflow_file(builder: str) -> str:
 
 
 class Backend:
-    def __init__(self, cache: str | Path = ".qq/git", token: str | None = None, **_):
+    def __init__(self, cache: str | Path = ".qq/git", token: str | None = None,
+                 write_token: str | None = None, **_):
         self.cache = Path(cache)
         self.token = token if token is not None else os.environ.get("GITHUB_TOKEN", "")
+        self.write_token = (write_token if write_token is not None
+                            else os.environ.get("QQ_GARDENER_TOKEN", ""))
+
+    @property
+    def forge(self) -> "Backend":
+        return self
 
     # --- history ------------------------------------------------------------------------------
 
@@ -54,7 +69,12 @@ class Backend:
                 return [], (f"{workflow_file(builder)} is not in {repo.slug}: the post-submit workflow "
                             "has not been delivered (infra-config `qqcfg deliver`)")
             items = doc.get("workflow_runs", [])
-            out.extend(_run(builder, r) for r in items)
+            # Only this repo's own push runs of the generated workflow count, so another workflow,
+            # a fork or a same-named file elsewhere cannot paint a builder red or green.
+            want = f".github/workflows/{workflow_file(builder)}"
+            out.extend(_run(builder, r) for r in items
+                       if r.get("event") == "push" and r.get("path", "").split("@")[0] == want
+                       and (r.get("head_repository") or {}).get("full_name") == repo.slug)
             if len(items) < 100:
                 break
         return out, ""
@@ -70,7 +90,91 @@ class Backend:
         return [s["name"] for j in doc.get("jobs", []) for s in j.get("steps", [])
                 if s.get("conclusion") in ("failure", "timed_out")]
 
-    def _get(self, path: str) -> dict | None:
+    # --- forge --------------------------------------------------------------------------------
+
+    def identity_problem(self) -> str:
+        return "" if self.write_token else ("no bot identity: QQ_GARDENER_TOKEN is not set, so the "
+                                            "gardener cannot push a revert or open its PR")
+
+    def _need_identity(self) -> str:
+        if problem := self.identity_problem():
+            raise NoIdentity(problem)
+        return self.write_token
+
+    def clone_url(self, repo: Repo) -> str:
+        return f"https://github.com/{repo.slug}.git"
+
+    def auth_env(self) -> dict:
+        """git credentials for github.com, in env only (GIT_CONFIG_*), never in argv or a URL."""
+        if not self.write_token:
+            return {}
+        basic = base64.b64encode(f"x-access-token:{self.write_token}".encode()).decode()
+        return {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+                "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}"}
+
+    def existing_revert(self, repo: Repo, culprit: str) -> str:
+        from qqgarden.revert import branch_name
+        owner = repo.slug.split("/")[0]
+        q = urllib.parse.urlencode({"head": f"{owner}:{branch_name(culprit)}", "state": "all"})
+        # Any PR from that branch blocks a second revert; only writers can make one, and the
+        # gardener's own record of what it opened is the ledger's links/, checked first.
+        pulls = self._get(f"/repos/{repo.slug}/pulls?{q}") or []
+        return pulls[0]["html_url"] if pulls else ""
+
+    def branch_exists(self, repo: Repo, branch: str) -> bool:
+        return self._get(f"/repos/{repo.slug}/branches/{urllib.parse.quote(branch, safe='')}") is not None
+
+    def push(self, workdir: Path, repo: Repo, branch: str) -> None:
+        self._need_identity()
+        git.run(["push", "--quiet", self.clone_url(repo), f"HEAD:refs/heads/{branch}"], cwd=workdir,
+                env=self.auth_env())
+
+    def open_revert(self, repo: Repo, branch: str, base: str, title: str, body: str,
+                    assignees: list[str]) -> str:
+        token = self._need_identity()
+        pr = self._send("POST", f"/repos/{repo.slug}/pulls", token,
+                        {"title": title, "head": branch, "base": repo.default_branch, "body": body})
+        if assignees:
+            self._send("POST", f"/repos/{repo.slug}/issues/{pr['number']}/assignees", token,
+                       {"assignees": assignees})
+        return pr["html_url"]
+
+    def queue_land(self, repo: Repo, url: str) -> None:
+        """Enable auto-merge, which enters the merge queue once required checks pass."""
+        token = self._need_identity()
+        number = url.rstrip("/").rsplit("/", 1)[-1]
+        pr = self._send("GET", f"/repos/{repo.slug}/pulls/{number}", token)
+        self._send("POST", "/graphql", token, {
+            "query": "mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id}) "
+                     "{ clientMutationId } }", "variables": {"id": pr["node_id"]}})
+
+    def rerun(self, repo: Repo, run_url: str) -> bool:
+        token = self._need_identity()
+        run_id = run_url.rstrip("/").rsplit("/runs/", 1)[-1].split("/")[0]
+        if not run_id.isdigit():
+            return False
+        self._send("POST", f"/repos/{repo.slug}/actions/runs/{run_id}/rerun-failed-jobs", token)
+        return True
+
+    def _send(self, method: str, path: str, token: str, body: dict | None = None):
+        req = urllib.request.Request(API + path, method=method,
+                                     data=json.dumps(body).encode() if body is not None else None,
+                                     headers={"Accept": "application/vnd.github+json",
+                                              "X-GitHub-Api-Version": "2022-11-28",
+                                              "Authorization": f"Bearer {token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = resp.read()
+        except urllib.error.HTTPError as e:
+            raise GardenerError(f"GitHub API {method} {path}: HTTP {e.code} {e.reason}") from None
+        except (urllib.error.URLError, TimeoutError) as e:
+            raise GardenerError(f"GitHub API {method} {path}: {e}") from None
+        doc = json.loads(data) if data else {}
+        if isinstance(doc, dict) and doc.get("errors") and path == "/graphql":
+            raise GardenerError(f"GitHub GraphQL: {doc['errors'][0].get('message', doc['errors'])}")
+        return doc
+
+    def _get(self, path: str) -> dict | list | None:
         req = urllib.request.Request(API + path, headers={
             "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
             **({"Authorization": f"Bearer {self.token}"} if self.token else {})})

@@ -45,3 +45,5 @@ jobs:
             --good "$good" --bad "$bad" --run ./check.sh --json | tee "$RUNNER_TEMP/bisect.json"
           python -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(not (r['culprit']==sys.argv[2] and r['verified']))" \
             "$RUNNER_TEMP/bisect.json" "$culprit" || { echo "::error::bisection did not name the planted culprit $culprit"; exit 1; }
+      - name: a planted build break is reverted within 30 min, and an 11th revert in 24 h is refused (V0-GAR-03 done-when, offline half)
+        run: python -m pytest -q -p no:cacheprovider tests/test_cycle.py::test_planted_build_break_is_reverted_within_30_minutes tests/test_policy.py::test_flood_refuses_the_eleventh_revert_in_24h -v
