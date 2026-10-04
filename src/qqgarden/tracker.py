@@ -24,9 +24,9 @@ class GitHubTracker:
         self.ledger_branch = ledger_branch
 
     @classmethod
-    def from_env(cls) -> "GitHubTracker | None":
+    def from_env(cls, ledger_branch: str = "ledger") -> "GitHubTracker | None":
         repo, token = os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("GITHUB_TOKEN", "")
-        return cls(repo, token) if repo and token else None
+        return cls(repo, token, ledger_branch or "ledger") if repo and token else None
 
     def record_url(self, state) -> str:
         return (f"https://github.com/{self.repo}/tree/{self.ledger_branch}/failures/"
@@ -40,12 +40,20 @@ class GitHubTracker:
     def open_postmortem(self, fid: str, title: str, body: str, label: str) -> str:
         from qqresults.backends.github import API, api
         marker = f"<!-- qq-postmortem: {fid} -->"
-        status, issues = api("GET", f"{API}/repos/{self.repo}/issues?labels={label}&state=all&per_page=100",
-                             self.token)
-        if status == 200:
+        # Find an earlier stub on every page; if the search fails, open nothing (a duplicate stub
+        # is worse than one cycle without one).
+        for page in range(1, 51):
+            status, issues = api("GET", f"{API}/repos/{self.repo}/issues?labels={label}&state=all"
+                                        f"&per_page=100&page={page}", self.token)
+            if status != 200:
+                raise GardenerError(f"{self.repo}: looking for an existing postmortem stub: HTTP {status}")
             for i in issues:
                 if (i.get("body") or "").startswith(marker):
                     return i["html_url"]
+            if len(issues) < 100:
+                break
+        else:
+            raise GardenerError(f"{self.repo}: more than 5000 {label} issues; not opening another stub")
         api("POST", f"{API}/repos/{self.repo}/labels", self.token,
             {"name": label, "color": "5319e7", "description": "quirq infra postmortem (blameless)"})
         status, issue = api("POST", f"{API}/repos/{self.repo}/issues", self.token,

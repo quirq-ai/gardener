@@ -97,3 +97,87 @@ def test_track_only_opens_no_stub(cfg, config_root, tmp_path):
     go()
     assert not (tmp_path / "issues" / "postmortems").exists()
     assert failures.read(record_dirs(ledger)[0]).current.culprit
+
+
+class CountingTracker(LocalTracker):
+    def __init__(self, root, fail=False):
+        super().__init__(root)
+        self.calls, self.fail = 0, fail
+
+    def mirror(self, state):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("HTTP 403 rate limited")
+        return super().mirror(state)
+
+
+def test_a_finished_record_costs_no_more_calls(cfg, config_root, tmp_path):
+    cfg["auto_revert"]["policy"]["auto_land_repos"] = ["xo-space"]
+    xo, go, ledger = setup(cfg, config_root, tmp_path)
+    t = CountingTracker(tmp_path / "issues")
+    records = Records(ledger.root / "failures", t, cfg, config_root)
+    repos = [r for r in config.repos(cfg) if r.name == "xo-space"]
+    backend = load("snapshot", path=tmp_path / "snap.json", forge_dir=tmp_path / "forge")
+
+    def run(now):
+        return cycle.run(cfg, repos, backend, ledger, Policy.from_config(cfg), now,
+                         timedelta(minutes=15), 100, records=records)
+    assert [o.step for o in run(NOW)] == ["reverted", "fix-linked"]
+    calls = t.calls
+    for i in range(1, 4):
+        run(NOW + timedelta(minutes=5 * i))
+    assert t.calls == calls
+
+
+def test_a_failing_record_never_stops_the_cycle(cfg, config_root, tmp_path):
+    xo, go, ledger = setup(cfg, config_root, tmp_path)
+    records = Records(ledger.root / "failures", CountingTracker(tmp_path / "issues", fail=True), cfg,
+                      config_root)
+    repos = [r for r in config.repos(cfg) if r.name == "xo-space"]
+    backend = load("snapshot", path=tmp_path / "snap.json", forge_dir=tmp_path / "forge")
+    out = cycle.run(cfg, repos, backend, ledger, Policy.from_config(cfg), NOW,
+                    timedelta(minutes=15), 100, records=records)
+    assert [o.step for o in out] == ["proposed", "record-failed"]
+    assert "rate limited" in out[1].reason
+
+
+def test_commit_titles_cannot_ping_or_link_from_the_stub(cfg, config_root, tmp_path):
+    xo, go, ledger = setup(cfg, config_root, tmp_path)
+    go()
+    evil = "fix @sharmasuraj0123 [click](https://evil.invalid) ![x](https://evil.invalid/p.png) `x`"
+    assert cycle.inline(evil) == "`" + evil.replace("`", "'") + "`"
+    stub = json.loads(next((tmp_path / "issues" / "postmortems").iterdir()).read_text())
+    heading = next(line for line in stub["body"].splitlines() if line.startswith("# Postmortem:"))
+    assert heading.endswith("reverted `commit 5`")
+
+
+def test_a_reservation_without_a_revert_is_reported(cfg, config_root, tmp_path):
+    from qqgarden.ledger import Entry
+    xo, go, ledger = setup(cfg, config_root, tmp_path, brk=99)
+    ledger.reserve(Entry(id="xo-space-" + "a" * 12, repo="xo-space", culprit="a" * 40, kind="build",
+                         action="propose", created_at="2026-10-04T11:00:00Z"))
+    [o] = go()
+    assert o.step == "unlinked" and o.culprit == "a" * 40
+
+
+def test_github_stub_search_pages_and_fails_closed(monkeypatch):
+    import pytest
+    from qqresults.backends import github as gh
+    from qqgarden.errors import GardenerError
+    from qqgarden.tracker import GitHubTracker
+    t = GitHubTracker("quirq-ai/gardener", "tok")
+    marker = "<!-- qq-postmortem: F1 -->"
+    calls = []
+
+    def api(method, url, token, body=None):
+        calls.append((method, url))
+        if method == "GET" and url.endswith("&page=1"):
+            return 200, [{"body": "other", "html_url": "u"}] * 100
+        if method == "GET":
+            return 200, [{"body": marker + "\nstub", "html_url": "https://github.com/x/issues/7"}]
+        raise AssertionError("must not create a second stub")
+    monkeypatch.setattr(gh, "api", api)
+    assert t.open_postmortem("F1", "t", "b", "postmortem") == "https://github.com/x/issues/7"
+    monkeypatch.setattr(gh, "api", lambda *a, **k: (502, None))
+    with pytest.raises(GardenerError, match="HTTP 502"):
+        t.open_postmortem("F1", "t", "b", "postmortem")

@@ -60,7 +60,7 @@ def pr_body(g: groups_mod.Group, culprit: Commit, decision_reason: str, action: 
             f"Proposed only: {decision_reason}. A person or the gardener rotation lands it.")
     return f"""Automatic revert by the quirq infra gardener (V0-GAR-03).
 
-Culprit: {culprit.sha} "{culprit.title}"
+Culprit: {culprit.sha} {inline(culprit.title)}
 Failure group: `{g.key}` ({g.kind} failure in {", ".join(g.builders)})
 Regression range: {g.last_good[:12] or "(none)"}..{g.first_bad[:12]}
 
@@ -92,38 +92,61 @@ def run(cfg: dict, repos: list[Repo], backend, ledger: Ledger, policy: Policy, n
         status, commits = postsubmit.observe(backend, repo, limit, now, grace)
         out += handle_repo(cfg, repo, status, commits, backend, ledger, policy, now, evidence, dry_run)
     if records is not None and not dry_run:
-        out += follow_up(repos, backend, ledger, records)
+        out += follow_up(repos, backend, ledger, records, now)
     return out
 
 
-def follow_up(repos: list[Repo], backend, ledger: Ledger, records) -> list[Outcome]:
+# A revert not landed after this long is taken as abandoned: the cycle stops asking the forge.
+LANDED_POLL = timedelta(days=14)
+
+
+def inline(text: str) -> str:
+    """A commit title shown in markdown, as inline code: its author cannot mention people, link or
+    embed anything through the gardener's issues and PRs."""
+    return "`" + " ".join(text.replace("`", "'").split()) + "`"
+
+
+def follow_up(repos: list[Repo], backend, ledger: Ledger, records, now: datetime) -> list[Outcome]:
     """V0-GAR-04: every created revert has a failure record and postmortem stub; once the revert
-    has landed, the record links it as the fix. Safe to repeat: records and links are idempotent."""
+    has landed, the record links it as the fix. Safe to repeat: records and links are idempotent.
+    One entry's failure never stops the others, and finished records cost no API calls."""
+    from qqgarden.postsubmit import parse_time
     by_name = {r.name: r for r in repos}
     links = ledger.revert_links()
     out = []
     for e in ledger.entries():
         repo, url = by_name.get(e.repo), links.get(e.id)
-        if repo is None or not url:
+        base = dict(repo=e.repo, group=e.group, kind=e.kind, culprit=e.culprit, revert=url or "",
+                    runs=list(e.runs))
+        if repo is None:
             continue
-        forge = backend.forge
-        culprit_url = forge.commit_url(repo, e.culprit)
-        g = groups_mod.Group(repo=e.repo, first_bad=e.culprit, last_good=e.last_good,
-                             suspects=[e.culprit], builders=[], kind=e.kind, tests=list(e.tests),
-                             runs=list(e.runs))
-        summary = f'{e.kind} break in {e.repo}: reverted "{e.title or e.culprit[:12]}"'
-        state = records.open(repo, e.culprit, culprit_url, e.culprit_landed_at, url, g, summary)
-        step = "recorded"
-        if not state.links.get("fix"):
-            landed = forge.landed(repo, url)
-            if landed:
-                state = records.link_fix(repo, e.culprit, landed)
-                step = "fix-linked"
-        ledger.sync("failures", f"failures: {e.id}")
-        out.append(Outcome(repo=e.repo, group=e.group, kind=e.kind, step=step, culprit=e.culprit,
-                           revert=url, reason=f"record {state.record.id}: "
-                           + ("closed" if state.closed else "needs " + ", ".join(state.missing)),
-                           runs=list(e.runs)))
+        if not url:
+            if not records.exists(repo, e.culprit):
+                out.append(Outcome(**base, step="unlinked",
+                                   reason="reserved, but no revert PR was linked; no record (for a person)"))
+            continue
+        try:
+            forge = backend.forge
+            if records.done(repo, e.culprit):
+                continue
+            g = groups_mod.Group(repo=e.repo, first_bad=e.culprit, last_good=e.last_good,
+                                 suspects=[e.culprit], builders=[], kind=e.kind, tests=list(e.tests),
+                                 runs=list(e.runs))
+            summary = f"{e.kind} break in {e.repo}: reverted {inline(e.title or e.culprit[:12])}"
+            state = records.open(repo, e.culprit, forge.commit_url(repo, e.culprit),
+                                 e.culprit_landed_at, url, g, summary)
+            step = "recorded"
+            if not state.links.get("fix") and now - parse_time(e.created_at) <= LANDED_POLL:
+                landed = forge.landed(repo, url)
+                if landed:
+                    state = records.link_fix(repo, e.culprit, landed)
+                    step = "fix-linked"
+            ledger.sync(["failures", "mirrors"], f"failures: {e.id}")
+        except Exception as err:   # noqa: BLE001 - one record never stops the others
+            out.append(Outcome(**base, step="record-failed", reason=f"{type(err).__name__}: {err}"))
+            continue
+        out.append(Outcome(**base, step=step, reason=f"record {state.record.id}: "
+                           + ("closed" if state.closed else "needs " + ", ".join(state.missing))))
     return out
 
 

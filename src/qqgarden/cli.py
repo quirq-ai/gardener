@@ -166,7 +166,7 @@ def _records(args, cfg: dict, ledger):
     from qqgarden import tracker
     from qqgarden.records import Records
     t = (tracker.LocalTracker(Path(args.tracker_dir)) if args.tracker_dir
-         else tracker.GitHubTracker.from_env())
+         else tracker.GitHubTracker.from_env(args.publish_ledger))
     if t is None:
         print("::warning::no tracker (set GITHUB_REPOSITORY and GITHUB_TOKEN, or --tracker-dir): "
               "failure records and postmortem stubs are not kept", file=sys.stderr)

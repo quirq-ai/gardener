@@ -144,6 +144,11 @@ opened in this repo with the workflow's token. A security-looking record is neve
 gets no public stub. Presubmit shows the done-when offline: a planted break's revert links
 culprit, revert and fix, with one stub.
 
+Each record is mirrored only when it changed, and a revert's landing is polled for 14 days, so a
+finished record costs no API calls. A record that fails is reported as `record-failed` and never
+stops the cycle. Commit titles appear as inline code in stubs and revert PRs, so a title cannot
+mention people or add links.
+
 TODO(suraj): file stubs in the affected repo instead, which needs the bot identity there.
 
 ## v0 status

@@ -103,11 +103,14 @@ class Ledger:
         """Link the PR once it exists. A separate record, so `reverts/` stays write-once."""
         self._write_once(self.root / "links" / f"{rid}.json", {"id": rid, "revert": revert})
 
-    def sync(self, rel: str, message: str) -> None:
-        """Commit and push whatever changed under `rel` (records written by other code)."""
+    def sync(self, rels: list[str], message: str) -> None:
+        """Commit and push whatever changed under `rels` (records written by other code)."""
         if not self.publish:
             return
-        git.run(["add", "-A", rel], cwd=self.root)
+        rels = [r for r in rels if (self.root / r).exists()]
+        if not rels:
+            return
+        git.run(["add", "-A", "--", *rels], cwd=self.root)
         if git.run(["diff", "--cached", "--quiet"], cwd=self.root, check=False).returncode == 0:
             return
         self._commit_push(message)

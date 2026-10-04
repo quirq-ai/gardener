@@ -16,9 +16,13 @@ The record closes only when culprit, fix and covering test are linked (postmorte
 `record_needs`); the covering test is the owner's to add, and the stub asks for it.
 Records live in the ledger (`<ledger>/failures/`, the qqresults layout). A security-looking record
 is never mirrored to a public issue and gets no public postmortem stub (test-pipelines' rule).
+TODO(expert): a record that only looks security-related after a later link keeps its stub; the
+mirror refuses and the cycle reports `record-failed` until a person deals with the issue.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -67,14 +71,33 @@ def stub_body(tmpl: str, state: failures.State, revert_url: str, culprit_url: st
 class Records:
     """Opens and follows records under `root` (the ledger's failures/), with a tracker for issues."""
 
-    def __init__(self, root: Path, tracker, cfg: dict, config_root: Path):
+    def __init__(self, root: Path, tracker, cfg: dict, config_root: Path, mirrors: Path | None = None):
         self.root = Path(root)
         self.tracker = tracker
         self.cfg = cfg
         self.config_root = Path(config_root)
+        # What each record looked like when last mirrored, so an unchanged record costs no API call.
+        self.mirrors = Path(mirrors) if mirrors else self.root.parent / "mirrors"
 
     def path(self, repo: Repo, culprit: str) -> Path:
         return self.root / failures.dirname(failures.failure_id("auto-revert", repo.slug or repo.name, culprit))
+
+    def exists(self, repo: Repo, culprit: str) -> bool:
+        return (self.path(repo, culprit) / failures.RECORD).is_file()
+
+    def done(self, repo: Repo, culprit: str) -> bool:
+        """The fix is linked and the mirror is current: nothing left for the cycle to do."""
+        if not self.exists(repo, culprit):
+            return False
+        state = failures.read(self.path(repo, culprit))
+        return bool(state.links.get("fix")) and self._mirrored(state) == _fingerprint(state)
+
+    def _marker(self, state: failures.State) -> Path:
+        return self.mirrors / f"{state.path.name}.json"
+
+    def _mirrored(self, state: failures.State) -> str:
+        p = self._marker(state)
+        return json.loads(p.read_text()).get("fingerprint", "") if p.is_file() else ""
 
     def open(self, repo: Repo, culprit: str, culprit_url: str, landed_at: str, revert_url: str,
              group, summary: str) -> failures.State:
@@ -99,10 +122,16 @@ class Records:
         return self.mirror(failures.read(state.path))
 
     def mirror(self, state: failures.State) -> failures.State:
+        if self._mirrored(state) == _fingerprint(state):
+            return state
         url = self.tracker.mirror(state)
         if url and state.links.get("issue") != url:
             failures.add_link(state.path, "issue", url)
-        return failures.read(state.path)
+        state = failures.read(state.path)
+        self.mirrors.mkdir(parents=True, exist_ok=True)
+        self._marker(state).write_text(json.dumps({"id": state.current.id,
+                                                   "fingerprint": _fingerprint(state)}) + "\n")
+        return state
 
     def link_fix(self, repo: Repo, culprit: str, fix_url: str) -> failures.State | None:
         p = self.path(repo, culprit)
@@ -113,3 +142,10 @@ class Records:
             return state
         failures.add_link(p, "fix", fix_url)
         return self.mirror(failures.read(p))
+
+
+def _fingerprint(state: failures.State) -> str:
+    """Everything the issue mirror shows: the record, its links, open or closed."""
+    doc = {"record": state.current.to_dict(), "links": state.links, "closed": state.closed,
+           "security": state.security}
+    return hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
