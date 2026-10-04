@@ -122,9 +122,12 @@ failure group it finds a culprit, and reverts it if the caps allow:
   another writer pushed first, the decision is re-made on the merged ledger before it counts. The cap
   counts the gardener's own records, never what a PR or commit claims about itself, and the
   gardener only ever lands a PR it opened in the same run.
-- **Identity.** Revert PRs are pushed and opened with `QQ_GARDENER_TOKEN`, a bot identity, because
-  a PR opened with a workflow's own `GITHUB_TOKEN` starts no workflows and would never be gated.
-  Without the secret the cycle reports what it would do and creates nothing.
+- **Identity.** Revert PRs, re-runs and backfills use a short-lived installation token of the
+  quirq infra bot, the one GitHub App that rollers and test-pipelines share (secrets
+  `QQ_BOT_CLIENT_ID` and `QQ_BOT_PRIVATE_KEY`). The workflow mints it for exactly the repos
+  infra-config onboards, with contents, pull-requests and actions write, and passes it as
+  `QQ_GARDENER_TOKEN`. A PR opened with a workflow's own `GITHUB_TOKEN` starts no workflows and
+  would never be gated. Without the App the cycle reports what it would do and creates nothing.
 
 Presubmit shows both done-whens offline: a planted build break, red on its post-submit and on
 that run's re-run, is reverted and main is green again, 20 minutes after it landed; and with 10
@@ -168,9 +171,9 @@ TODO(suraj): file stubs in the affected repo instead, which needs the bot identi
 | V0-GAR-03 | Auto-revert within caps | #4 | merged |
 | V0-GAR-04 | Failure record and postmortem stub per revert | #5 | merged |
 
-Every item's done-when runs offline in presubmit. Live runs wait on: post-submit delivery to
-xo-space and innernet (suraj merges xo-space #211 and innernet #37), the gardener's bot identity
-(`QQ_GARDENER_TOKEN`), and `auto_land_repos` in auto_revert.toml before any revert lands.
+Every item's done-when runs offline in presubmit. Live runs wait on: the redelivered post-submits
+with the backfill input (xo-space #215, innernet #40), the shared quirq infra bot App, and
+`auto_land_repos` in auto_revert.toml before any revert lands.
 
 Out of scope for v0: test-failure reverts that land, revert precision, postmortem drafting and
 canary bisection (v1); agents holding the rotation (v2).
