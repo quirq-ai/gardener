@@ -40,6 +40,10 @@ class Entry:
     group: str = ""           # the failure group key
     revert: str = ""          # the revert PR or commit, once known
     runs: list[str] = field(default_factory=list)
+    last_good: str = ""
+    title: str = ""           # the culprit's title
+    culprit_landed_at: str = ""
+    tests: list[str] = field(default_factory=list)
     schema: str = SCHEMA
 
 
@@ -68,7 +72,10 @@ class Ledger:
         commit and raises, so the cap is judged on every record, not just ours."""
         rel = str(path.relative_to(self.root))
         git.run(["add", rel], cwd=self.root)
-        git.run([*IDENTITY, "commit", "--quiet", "-m", f"ledger: {rel}"], cwd=self.root)
+        self._commit_push(f"ledger: {rel}", recheck)
+
+    def _commit_push(self, message: str, recheck=None) -> None:
+        git.run([*IDENTITY, "commit", "--quiet", "-m", message], cwd=self.root)
         for _ in range(3):   # another writer may have pushed; records never collide, so rebase is safe
             if git.run(["push", "--quiet", "origin", f"HEAD:{self.publish}"], cwd=self.root,
                        check=False).returncode == 0:
@@ -78,13 +85,13 @@ class Ledger:
             if pulled.returncode != 0:   # e.g. the same record written twice: leave the worktree clean
                 git.run(["rebase", "--abort"], cwd=self.root, check=False)
                 git.run(["reset", "--quiet", "--hard", "HEAD~1"], cwd=self.root)
-                raise GardenerError(f"could not rebase {rel} onto the {self.publish} branch: "
+                raise GardenerError(f"could not rebase \"{message}\" onto the {self.publish} branch: "
                                     f"{pulled.stderr.strip()}; nothing was created")
             why = recheck() if recheck else ""
             if why:
                 git.run(["reset", "--quiet", "--hard", "HEAD~1"], cwd=self.root)
                 raise GardenerError(f"another writer changed the ledger first; now refused: {why}")
-        raise GardenerError(f"could not push {rel} to the {self.publish} branch; nothing was created")
+        raise GardenerError(f"could not push \"{message}\" to the {self.publish} branch; nothing was created")
 
     def reserve(self, e: Entry, recheck=None) -> None:
         self._write_once(self.root / "reverts" / f"{e.id}.json", asdict(e), recheck)
@@ -95,6 +102,18 @@ class Ledger:
     def set_revert(self, rid: str, revert: str) -> None:
         """Link the PR once it exists. A separate record, so `reverts/` stays write-once."""
         self._write_once(self.root / "links" / f"{rid}.json", {"id": rid, "revert": revert})
+
+    def sync(self, rels: list[str], message: str) -> None:
+        """Commit and push whatever changed under `rels` (records written by other code)."""
+        if not self.publish:
+            return
+        rels = [r for r in rels if (self.root / r).exists()]
+        if not rels:
+            return
+        git.run(["add", "-A", "--", *rels], cwd=self.root)
+        if git.run(["diff", "--cached", "--quiet"], cwd=self.root, check=False).returncode == 0:
+            return
+        self._commit_push(message)
 
     def revert_links(self) -> dict[str, str]:
         d = self.root / "links"

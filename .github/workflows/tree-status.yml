@@ -89,6 +89,7 @@ jobs:
     permissions:
       contents: write           # push to this repo's ledger branch only
       actions: read
+      issues: write             # failure-record mirrors and postmortem stubs in this repo (V0-GAR-04)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0

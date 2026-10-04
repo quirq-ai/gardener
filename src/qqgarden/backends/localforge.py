@@ -59,3 +59,15 @@ class LocalForge:
 
     def rerun(self, repo, run_url: str) -> bool:
         return False
+
+    def commit_url(self, repo, sha: str) -> str:
+        return f"local://{repo.name}/commit/{sha}"
+
+    def landed(self, repo, url: str) -> str:
+        """The revert's commit once it is on the default branch, else ""."""
+        pr = json.loads((self.dir / "prs" / f"{url.rsplit('/', 1)[1]}.json").read_text())
+        remote = Path(self.remotes[repo.name])
+        tip = git.run(["rev-parse", f"refs/heads/{pr['branch']}"], cwd=remote).stdout.strip()
+        on_main = git.run(["merge-base", "--is-ancestor", tip, f"refs/heads/{repo.default_branch}"],
+                          cwd=remote, check=False).returncode == 0
+        return self.commit_url(repo, tip) if on_main else ""

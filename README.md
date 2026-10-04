@@ -95,6 +95,9 @@ failure group it finds a culprit, and reverts it if the caps allow:
   PR ("stuck", for a person), never stops the rest of the cycle. A longer range needs `qqgarden bisect`,
   which runs the repo's code, so the cycle leaves it to the gardener agent, which then runs
   `qqgarden revert --culprit <sha> --kind build --verified`.
+- **Evidence.** Only GitHub's own data decides: this repo's `push` runs of the generated
+  `qq-<builder>.yml` and their failed step names. Stored test verdicts are shown but never change
+  a failure's type until test-pipelines checks where each record came from.
 - **Caps**, all from infra-config's `auto_revert.toml` and none in code: at most `daily_cap` (10)
   reverts created per rolling `window_hours` (24) across all repos and failure types, counting
   every created revert, proposed or landed (suraj can change that default). Beneath it, per type,
@@ -120,14 +123,46 @@ that run's re-run, is reverted and main is green again, 20 minutes after it land
 reverts in the ledger an 11th is refused. Live, the time to revert is the post-submit run, plus
 up to 5 minutes for the next cycle, plus the verifying re-run and the cycle after it.
 
+## Failure record and postmortem stub per revert (V0-GAR-04)
+
+Every revert the cycle creates gets one failure record, test-pipelines' `Failure` of kind
+`auto-revert` opened through qqresults, so qq has one record format. Its id comes from the repo
+and the culprit, so a culprit never gets two records. The record links:
+
+- `culprit`: the culprit commit;
+- `operation`: the revert PR;
+- `postmortem`: a stub issue opened from infra-config's `templates/postmortem.md`, when
+  `postmortem.toml`'s `auto-revert` trigger asks for one (`stub` in v0), with the trigger, repo,
+  record, timeline and culprit filled in;
+- `fix`: the revert's commit, linked by a later cycle once the revert is on main, whether the
+  gardener landed it or a person merged it;
+- `issue`: its labelled `qq-failure` issue mirror.
+
+It closes when the owner links the covering test (`qqresults failure link`), as postmortem.toml's
+`record_needs` asks. Records live in the `ledger` branch under `failures/`; issues and stubs are
+opened in this repo with the workflow's token. A security-looking record is never mirrored and
+gets no public stub. Presubmit shows the done-when offline: a planted break's revert links
+culprit, revert and fix, with one stub.
+
+Each record is mirrored only when it changed, and a revert's landing is polled for 14 days, so a
+finished record costs no API calls. A record that fails is reported as `record-failed` and never
+stops the cycle. Commit titles appear as inline code in stubs and revert PRs, so a title cannot
+mention people or add links.
+
+TODO(suraj): file stubs in the affected repo instead, which needs the bot identity there.
+
 ## v0 status
 
 | Item | What | PR | State |
 |---|---|---|---|
-| V0-GAR-01 | Post-submit on every commit: red detection and tree status | #2 | in review |
+| V0-GAR-01 | Post-submit on every commit: red detection and tree status | #2 | merged |
 | V0-GAR-02 | Group failures by regression range and bisect | #3 | merged |
-| V0-GAR-03 | Auto-revert within caps | #4 | in review |
-| V0-GAR-04 | Failure record and postmortem stub per revert | | not started |
+| V0-GAR-03 | Auto-revert within caps | #4 | merged |
+| V0-GAR-04 | Failure record and postmortem stub per revert | #5 | in review |
+
+Every item's done-when runs offline in presubmit. Live runs wait on: post-submit delivery to
+xo-space and innernet (suraj merges xo-space #211 and innernet #37), the gardener's bot identity
+(`QQ_GARDENER_TOKEN`), and `auto_land_repos` in auto_revert.toml before any revert lands.
 
 Out of scope for v0: test-failure reverts that land, revert precision, postmortem drafting and
 canary bisection (v1); agents holding the rotation (v2).

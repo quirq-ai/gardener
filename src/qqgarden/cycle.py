@@ -60,7 +60,7 @@ def pr_body(g: groups_mod.Group, culprit: Commit, decision_reason: str, action: 
             f"Proposed only: {decision_reason}. A person or the gardener rotation lands it.")
     return f"""Automatic revert by the quirq infra gardener (V0-GAR-03).
 
-Culprit: {culprit.sha} "{culprit.title}"
+Culprit: {culprit.sha} {inline(culprit.title)}
 Failure group: `{g.key}` ({g.kind} failure in {", ".join(g.builders)})
 Regression range: {g.last_good[:12] or "(none)"}..{g.first_bad[:12]}
 
@@ -82,7 +82,8 @@ def verified(spans: list[RedSpan]) -> bool:
 
 
 def run(cfg: dict, repos: list[Repo], backend, ledger: Ledger, policy: Policy, now: datetime,
-        grace: timedelta, limit: int, evidence=None, dry_run: bool = False) -> list[Outcome]:
+        grace: timedelta, limit: int, evidence=None, dry_run: bool = False,
+        records=None) -> list[Outcome]:
     if evidence is None:
         from qqgarden.evidence import Evidence
         evidence = Evidence(backend, {r.name: r for r in repos})
@@ -90,6 +91,62 @@ def run(cfg: dict, repos: list[Repo], backend, ledger: Ledger, policy: Policy, n
     for repo in repos:
         status, commits = postsubmit.observe(backend, repo, limit, now, grace)
         out += handle_repo(cfg, repo, status, commits, backend, ledger, policy, now, evidence, dry_run)
+    if records is not None and not dry_run:
+        out += follow_up(repos, backend, ledger, records, now)
+    return out
+
+
+# A revert not landed after this long is taken as abandoned: the cycle stops asking the forge.
+LANDED_POLL = timedelta(days=14)
+
+
+def inline(text: str) -> str:
+    """A commit title shown in markdown, as inline code: its author cannot mention people, link or
+    embed anything through the gardener's issues and PRs."""
+    return "`" + " ".join(text.replace("`", "'").split()) + "`"
+
+
+def follow_up(repos: list[Repo], backend, ledger: Ledger, records, now: datetime) -> list[Outcome]:
+    """V0-GAR-04: every created revert has a failure record and postmortem stub; once the revert
+    has landed, the record links it as the fix. Safe to repeat: records and links are idempotent.
+    One entry's failure never stops the others, and finished records cost no API calls."""
+    from qqgarden.postsubmit import parse_time
+    by_name = {r.name: r for r in repos}
+    links = ledger.revert_links()
+    out = []
+    for e in ledger.entries():
+        repo, url = by_name.get(e.repo), links.get(e.id)
+        base = dict(repo=e.repo, group=e.group, kind=e.kind, culprit=e.culprit, revert=url or "",
+                    runs=list(e.runs))
+        if repo is None:
+            continue
+        if not url:
+            if not records.exists(repo, e.culprit):
+                out.append(Outcome(**base, step="unlinked",
+                                   reason="reserved, but no revert PR was linked; no record (for a person)"))
+            continue
+        try:
+            forge = backend.forge
+            if records.done(repo, e.culprit):
+                continue
+            g = groups_mod.Group(repo=e.repo, first_bad=e.culprit, last_good=e.last_good,
+                                 suspects=[e.culprit], builders=[], kind=e.kind, tests=list(e.tests),
+                                 runs=list(e.runs))
+            summary = f"{e.kind} break in {e.repo}: reverted {inline(e.title or e.culprit[:12])}"
+            state = records.open(repo, e.culprit, forge.commit_url(repo, e.culprit),
+                                 e.culprit_landed_at, url, g, summary)
+            step = "recorded"
+            if not state.links.get("fix") and now - parse_time(e.created_at) <= LANDED_POLL:
+                landed = forge.landed(repo, url)
+                if landed:
+                    state = records.link_fix(repo, e.culprit, landed)
+                    step = "fix-linked"
+            ledger.sync(["failures", "mirrors"], f"failures: {e.id}")
+        except Exception as err:   # noqa: BLE001 - one record never stops the others
+            out.append(Outcome(**base, step="record-failed", reason=f"{type(err).__name__}: {err}"))
+            continue
+        out.append(Outcome(**base, step=step, reason=f"record {state.record.id}: "
+                           + ("closed" if state.closed else "needs " + ", ".join(state.missing))))
     return out
 
 
@@ -171,7 +228,8 @@ def revert_culprit(cfg, repo: Repo, g: groups_mod.Group, culprit: Commit, backen
             # cannot both take the last slot under the cap.
             ledger.reserve(Entry(id=rid, repo=repo.name, culprit=culprit.sha, kind=g.kind,
                                  action=action.value, created_at=timestamp(now), reason=reason,
-                                 group=g.key, runs=g.runs),
+                                 group=g.key, runs=g.runs, last_good=g.last_good, title=culprit.title,
+                                 culprit_landed_at=culprit.landed_at, tests=g.tests),
                            recheck=lambda: "" if judge().action is not Action.REFUSE else judge().reason)
         forge.push(made.workdir, repo, branch)
         url = forge.open_revert(repo, branch, made.base, f'Revert "{made.title}"',

@@ -160,6 +160,20 @@ def _report(outcomes, as_json: bool) -> None:
               + (f" -> {o.revert}" if o.revert else "") + f"\n    {o.reason}")
 
 
+def _records(args, cfg: dict, ledger):
+    """Failure records and postmortem stubs (V0-GAR-04): issues in this repo on GitHub
+    (GITHUB_REPOSITORY, GITHUB_TOKEN with issues: write), or files with --tracker-dir."""
+    from qqgarden import tracker
+    from qqgarden.records import Records
+    t = (tracker.LocalTracker(Path(args.tracker_dir)) if args.tracker_dir
+         else tracker.GitHubTracker.from_env(args.publish_ledger))
+    if t is None:
+        print("::warning::no tracker (set GITHUB_REPOSITORY and GITHUB_TOKEN, or --tracker-dir): "
+              "failure records and postmortem stubs are not kept", file=sys.stderr)
+        return None
+    return Records(ledger.root / "failures", t, cfg, Path(args.config))
+
+
 def cmd_cycle(args) -> int:
     from qqgarden import cycle
     from qqgarden.evidence import Evidence
@@ -171,8 +185,10 @@ def cmd_cycle(args) -> int:
     repos = _repos(cfg, args.repo)
     ev = Evidence(backend, {r.name: r for r in config.repos(cfg)}, Path(args.store) if args.store else None)
     now = postsubmit.parse_time(args.now) if args.now else datetime.now(timezone.utc)
-    outcomes = cycle.run(cfg, repos, backend, Ledger(Path(args.ledger), args.publish_ledger), policy, now,
-                         timedelta(minutes=args.grace_minutes), args.limit, ev, args.dry_run)
+    ledger = Ledger(Path(args.ledger), args.publish_ledger)
+    outcomes = cycle.run(cfg, repos, backend, ledger, policy, now,
+                         timedelta(minutes=args.grace_minutes), args.limit, ev, args.dry_run,
+                         records=_records(args, cfg, ledger))
     _report(outcomes, args.json)
     return 0
 
@@ -251,6 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--store", help="results store checkout, for failing tests")
     c.add_argument("--forge-dir", help="snapshot backend: where the local forge keeps its PRs")
     c.add_argument("--dry-run", action="store_true", help="decide and report; create nothing")
+    c.add_argument("--tracker-dir", help="keep issue mirrors and postmortem stubs as files here (offline)")
     c.set_defaults(func=cmd_cycle)
 
     r = sub.add_parser("revert", help="revert one bisected culprit within the caps (V0-GAR-03)")
