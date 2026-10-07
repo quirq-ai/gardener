@@ -4,6 +4,8 @@ Part of **quirq infra** ("qq"), quirq-ai's CI/CD system for repos in any languag
 `main` green in every onboarded repo, as an agent plus a small service: it watches the post-submit
 run on every main commit, publishes a tree status, groups failures by regression range, bisects
 them to a culprit and opens clean reverts within the caps in infra-config's `auto_revert.toml`.
+Today it reports only: the tree status is live, but its GitHub App does not exist yet, so it opens
+no revert and none lands on its own (see "v0 status").
 
 **Chromium counterpart:** the gardener (sheriff) rotations, Sheriff-o-Matic (failure grouping by
 regression range) and LUCI Bisection (culprit finding and auto-revert with daily caps), plus the
@@ -100,8 +102,8 @@ qqgarden bisect --config <infra-config> --repo-dir <clone> --good <sha> --bad <s
 Presubmit plants a break in a 12-commit repo (`tools/plant-break.sh`) and checks that bisection
 names it, verified.
 
-TODO(expert): a probe that re-runs the repo's own post-submit builder on a commit, once
-infra-config's generated post-submit accepts a commit input.
+TODO(expert): a probe that re-runs the repo's own post-submit builder on a commit. infra-config's
+generated post-submit now accepts a `commit` input (the backfill dispatch above).
 
 ## Auto-revert within caps (V0-GAR-03)
 
@@ -156,11 +158,12 @@ failure group it finds a culprit, and reverts it if the caps allow:
   cancelled (a push or cron run can still replace it) and that the `ledger` branch exists, and run
   it again if not; then delete the variable and run the workflow once more without it to restart
   the chain.
-  TODO(suraj): rulesets on `ledger` and `tree-status` (no deletion or force push), asked of gate.
+  Gate's `qq-state-branches` ruleset blocks deletion and force pushes of `ledger` and
+  `tree-status` (gate `settings/github.toml`, applied with the repo rulesets at gate `6610664`).
 - **Titles.** Revert PRs and commits are titled `Revert <sha12> (qq gardener)`; the culprit's own
   title appears only as inline code in the body, so it cannot mention, link or close anything.
 - **Identity.** Revert PRs, re-runs and backfills use a short-lived installation token of the
-  gardener's own GitHub App, "quirq gardener" (one App per tool, so no other tool's key can mint
+  gardener's own GitHub App, "quirq gardener" (not created yet) (one App per tool, so no other tool's key can mint
   its permissions). It needs, on the onboarded repos only:
   - contents: write, to push revert branches;
   - pull requests: write, to open revert PRs (and enable auto-merge once `auto_land_repos` allows);
@@ -225,11 +228,12 @@ TODO(suraj): file stubs in the affected repo instead, which needs the bot identi
 | V0-GAR-03 | Auto-revert within caps | #4 | merged |
 | V0-GAR-04 | Failure record and postmortem stub per revert | #5 | merged |
 
-Every item's done-when runs offline in presubmit. The wave 4 audit's fixes (B1, B2, S1-S8) are in
-the audit-fixes PR. Live runs wait on: the redelivered post-submits with the backfill input
-(xo-space #215, innernet #40), the quirq gardener App, one manual run with `bootstrap-ledger`, and
-the `ledger`/`tree-status` rulesets. No revert lands on its own until a repo is listed in
-`auto_land_repos`.
+Every item's done-when runs offline in presubmit. The wave 4 audit's fixes (B1, B2, S1-S8) are
+merged (#8). Live today: the `tree-status` workflow publishes tree status for xo-space and innernet
+on the `tree-status` branch, and the post-submits with the backfill input are delivered (xo-space
+#215, innernet #40). Reverts wait on the quirq gardener App, which does not exist yet, and one
+manual run with `bootstrap-ledger` (there is no `ledger` branch yet). No revert lands on its own
+until a repo is listed in `auto_land_repos`.
 
 Out of scope for v0: test-failure reverts that land, revert precision, postmortem drafting and
 canary bisection (v1); agents holding the rotation (v2).
