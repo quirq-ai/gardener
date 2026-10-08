@@ -2,5 +2,5 @@
 
 | Repo | Tree | Why | Commits checked | Missing | Cancelled |
 |---|---|---|---|---|---|
-| xo-space | **open** | every post-submit builder's newest verdict is green | 18 | 0 | 0 |
+| xo-space | **open** | every post-submit builder's newest verdict is green | 19 | 0 | 0 |
 | innernet | **open** | every post-submit builder's newest verdict is green | 7 | 0 | 0 |
