@@ -2,9 +2,9 @@
   "branch": "main",
   "builders": {
     "innernet-postsubmit": {
-      "commit": "e48fd9795221130b1b930d8f0374f4e548df34a0",
+      "commit": "746be31b3ebaf6c81bd8be577b9bc424b355d853",
       "state": "green",
-      "url": "https://github.com/quirq-ai/innernet/actions/runs/37666257383"
+      "url": "https://github.com/quirq-ai/innernet/actions/runs/37874226791"
     }
   },
   "coverage": {
@@ -12,13 +12,11 @@
     "cancelled": [],
     "commits": 8,
     "missing": [],
-    "pending": [
-      "746be31b3ebaf6c81bd8be577b9bc424b355d853 innernet-postsubmit"
-    ],
+    "pending": [],
     "retried": [],
     "since": "d31bc87798663f665f8e4d07be97a0633e560482"
   },
-  "green": "e48fd9795221130b1b930d8f0374f4e548df34a0",
+  "green": "746be31b3ebaf6c81bd8be577b9bc424b355d853",
   "head": "746be31b3ebaf6c81bd8be577b9bc424b355d853",
   "notes": [],
   "reason": "every post-submit builder's newest verdict is green",
