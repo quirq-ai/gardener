@@ -138,6 +138,9 @@ class Backend:
         jobs = (doc or {}).get("jobs") or []
         if not jobs or any(j.get("status") != "completed" for j in jobs):
             return None
+        if (doc or {}).get("total_count", len(jobs)) > len(jobs):
+            return None   # more jobs than one page: an unread job could hold the failure
+
         return [s["name"] for j in jobs for s in j.get("steps", [])
                 if s.get("conclusion") in ("failure", "timed_out")]
 
