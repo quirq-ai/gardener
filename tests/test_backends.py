@@ -116,3 +116,27 @@ def test_github_rerun_in_progress_keeps_its_last_verdict(monkeypatch):
     run = BuilderRun("demo-postsubmit", "c" * 40, "in_progress", "", "42", 2,
                      "https://github.com/quirq-ai/demo/actions/runs/42")
     assert b._with_prior(REPO, run).state is RunState.RED
+
+
+def test_github_attempt_failed_steps_reads_that_attempt(monkeypatch):
+    b = github.Backend(token="")
+    seen = []
+    docs = {
+        1: {"jobs": [{"status": "completed", "steps": [{"name": "build (x)", "conclusion": "failure"},
+                                                      {"name": "test (y)", "conclusion": "skipped"}]}]},
+        2: {"jobs": [{"status": "in_progress", "steps": [{"name": "build (x)", "conclusion": "failure"}]}]},
+        3: {"jobs": [{"status": "completed", "steps": [{"name": "build (x)", "conclusion": "success"}]}]},
+    }
+
+    def fake_get(path):
+        seen.append(path)
+        return docs.get(int(path.split("/attempts/")[1].split("/")[0]))
+
+    monkeypatch.setattr(b, "_get", fake_get)
+    url = "https://github.com/quirq-ai/demo/actions/runs/7"
+    assert b.attempt_failed_steps(REPO, url, 1) == ["build (x)"]
+    assert seen == ["/repos/quirq-ai/demo/actions/runs/7/attempts/1/jobs?per_page=100"]
+    assert b.attempt_failed_steps(REPO, url, 2) is None          # still running
+    assert b.attempt_failed_steps(REPO, url, 3) == []            # complete and green
+    assert b.attempt_failed_steps(REPO, url, 4) is None          # no such attempt
+    assert b.attempt_failed_steps(REPO, "not a run", 1) is None

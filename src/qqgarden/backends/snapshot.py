@@ -63,3 +63,12 @@ class Backend:
 
     def failed_steps(self, repo: Repo, run_url: str) -> list[str]:
         return list(self._repo(repo).get("failed_steps", {}).get(run_url, []))
+
+    def attempt_failed_steps(self, repo: Repo, run_url: str, attempt: int) -> list[str] | None:
+        """`attempt_failed_steps` maps a run URL to {"<attempt>": [steps]}; a run with no entry
+        has only its first attempt's steps, under `failed_steps`. A missing attempt is None."""
+        per = self._repo(repo).get("attempt_failed_steps", {}).get(run_url)
+        if per is not None:
+            steps = per.get(str(attempt))
+            return None if steps is None else list(steps)
+        return self.failed_steps(repo, run_url) if attempt == 1 else None

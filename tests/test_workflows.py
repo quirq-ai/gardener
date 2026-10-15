@@ -42,7 +42,7 @@ def test_qqresults_runs_at_the_pinned_commit():
 
 def test_tokens_reach_only_the_steps_that_push():
     names = [re.match(r"name: (.*)", s).group(1) for s in steps_using(WORKFLOW, "${{ github.token }}")]
-    assert names == ["compute the tree status", "publish changes", "open the ledger branch",
+    assert names == ["compute the tree status", "publish changes", "publish failure groups", "open the ledger branch",
                      "garden (group, verify, revert within caps)", "dispatch the next run"]
 
 
@@ -77,3 +77,47 @@ def test_an_empty_ledger_needs_a_person():
     # a bootstrap really creates the branch; without the App the cycle reports on a scratch ledger
     assert "commit -q --allow-empty" in step and "push origin HEAD:refs/heads/ledger" in step
     assert '"$HAS_BOT" != "true"' in step and "publish=" in step
+
+
+def _step(name: str) -> str:
+    [step] = [s for s in re.split(r"\n      - ", WORKFLOW) if s.startswith(f"name: {name}\n")]
+    return step
+
+
+def test_failure_groups_can_never_stop_or_delay_the_status_publish():
+    order = [m.group(1) for m in re.finditer(r"\n      - name: (.*)", WORKFLOW.split("\n  cycle:\n", 1)[0])]
+    i = order.index("publish failure groups")
+    assert order[i - 1] == "publish changes"
+    assert order[i + 1] == "every main commit has a post-submit result (V0-GAR-01 done-when)"
+    step = _step("publish failure groups")
+    assert "timeout-minutes: 2\n" in step and "continue-on-error: true\n" in step
+    # runs only after the status was pushed: no if:, so never always()
+    assert "\n        if:" not in step and "always()" not in WORKFLOW
+    # groups come from the status files just written, and the file is replaced only on success
+    assert "--from-status .qq/publish/status" in step and "--out .qq/publish/groups/groups.json" in step
+    assert 'if git diff --cached --quiet; then echo "no change"; exit 0; fi' in step
+    # it stages only its own file, never the status files
+    assert re.findall(r"git add .*", step) == ["git add groups/groups.json"]
+    # the token is the push's: no second copy for the Python process
+    assert "\n          TOKEN:" not in step and '"$GITHUB_TOKEN" | base64' in step
+    # it pushes like the status step: the job token, for this repo's URL only
+    assert "http.https://github.com/${GITHUB_REPOSITORY}.extraheader=AUTHORIZATION: basic $auth" in step
+    assert "push origin HEAD:refs/heads/tree-status" in step
+
+
+def test_the_status_commit_message_is_unchanged():
+    # Built from the status files only (non-recursive, so groups/ never joins it): the message the
+    # dashboard reads as the open/close log.
+    step = _step("publish changes")
+    assert 'sorted(glob.glob("status/*.json"))' in step
+    assert 'print(", ".join(f"{d[\'repo\']} {d[\'state\']}" for d in states))' in step
+    assert re.findall(r'commit -q -m "([^"]*)"', step) == ["tree-status: $msg"]
+
+
+def test_the_groups_commit_names_no_repo_state():
+    step = _step("publish failure groups")
+    [first, body] = re.search(r'commit -q -m "([^"]*)" -m "([^"]*)"', step).groups()
+    assert first == "groups: $n red ranges"
+    assert "," not in first and "tree-status:" not in first
+    assert body == "from tree-status $(git rev-parse HEAD)"
+    assert "print(len(json.load(open(\"groups/groups.json\"))[\"groups\"]))" in step

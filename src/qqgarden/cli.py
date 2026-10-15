@@ -2,6 +2,7 @@
 
     qqgarden status --config <infra-config checkout> [--repo NAME]... [--out DIR] [--require-coverage]
     qqgarden groups --config <infra-config checkout> [--repo NAME]... [--store DIR]
+    qqgarden groups --config <infra-config checkout> --from-status DIR [--previous FILE] [--out FILE]
     qqgarden bisect --config <infra-config checkout> --repo-dir DIR --good SHA --bad SHA --run CMD
     qqgarden cycle  --config <infra-config checkout> --ledger DIR [--dry-run]
     qqgarden revert --config <infra-config checkout> --ledger DIR --repo NAME --culprit SHA --kind build|test
@@ -101,6 +102,10 @@ def cmd_groups(args) -> int:
     from qqgarden.evidence import Evidence
     cfg = config.load(Path(args.config))
     backend = _backend(args, cfg)
+    if args.from_status:
+        return publish_groups(args, cfg, backend)
+    if args.previous or args.out:
+        raise GardenerError("--previous and --out only work with --from-status")
     ev = Evidence(backend, {r.name: r for r in config.repos(cfg)}, Path(args.store) if args.store else None)
     # The results store can be written by any workflow run until test-pipelines checks where each
     # record came from: it is shown, never used to tell the failure type.
@@ -113,6 +118,30 @@ def cmd_groups(args) -> int:
                   + (f"  tests={len(g.tests)}" if g.tests else ""))
         if not found:
             print("no red post-submit builders")
+    return 0
+
+
+def publish_groups(args, cfg: dict, backend) -> int:
+    """The groups file the tree-status job publishes, from the status files it just wrote. Any
+    error leaves --out untouched: nothing new, empty or partial is ever written. A status file
+    left over from a repo infra-config no longer onboards is skipped with a warning."""
+    from qqgarden import groupsfile
+    repos = {r.name: r for r in config.repos(cfg)}
+    directory = Path(args.from_status)
+    if not directory.is_dir() or not any(directory.glob("*.json")):
+        raise GardenerError(f"no status files in {directory}: refusing to write an empty groups file")
+    items = groupsfile.read_statuses(directory)
+    for repo in sorted({s.repo for s in items} - repos.keys()):
+        print(f"::warning::status file for {repo}, which infra-config does not onboard: skipped", file=sys.stderr)
+    items = [s for s in items if s.repo in repos]
+    previous = groupsfile.read_previous(Path(args.previous)) if args.previous else None
+    doc = groupsfile.build(items, lambda repo, url, n: backend.attempt_failed_steps(repos[repo], url, n), previous)
+    if args.out:
+        groupsfile.write(Path(args.out), doc)
+        n = len(doc["groups"])
+        print(f"{n} red {'range' if n == 1 else 'ranges'}")
+    else:
+        print(groupsfile.to_json(doc), end="")
     return 0
 
 
@@ -304,6 +333,12 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("groups", help="red builders grouped by regression range, with failure type (V0-GAR-02)")
     live(g)
     g.add_argument("--store", help="results store checkout (test-pipelines `results` branch) for failing tests")
+    g.add_argument("--from-status", metavar="DIR",
+                   help="group the red ranges in these status files (what the tree-status job just wrote) "
+                        "instead of observing again; prints or writes the groups file")
+    g.add_argument("--previous", metavar="FILE", help="with --from-status: the last groups file, whose "
+                   "unchanged ranges are carried over without reading anything")
+    g.add_argument("--out", metavar="FILE", help="with --from-status: write the groups file here, all or nothing")
     g.set_defaults(func=cmd_groups)
 
     b = sub.add_parser("bisect", help="bisect good..bad by running a command on each commit (V0-GAR-02)")

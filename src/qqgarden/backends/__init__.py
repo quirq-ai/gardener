@@ -6,6 +6,7 @@ A backend module defines `Backend` with:
     commits(repo, limit) -> list[Commit]           # first-parent history, newest first
     runs(repo, builder) -> (list[BuilderRun], note) # note is "" or why there are none
     failed_steps(repo, run_url) -> list[str]        # names of the run's failed steps
+    attempt_failed_steps(repo, run_url, n) -> list[str] | None  # one attempt's; None until complete
 """
 from __future__ import annotations
 
