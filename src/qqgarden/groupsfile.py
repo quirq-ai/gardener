@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 from typing import Any, Protocol
 
+from qqgarden.errors import GardenerError
 from qqgarden.groups import classify
 from qqgarden.model import RedSpan, TreeStatus
 
@@ -110,7 +111,15 @@ def to_json(doc: dict[str, Any]) -> str:
 
 
 def read_statuses(directory: Path) -> list[TreeStatus]:
-    return [TreeStatus.from_dict(json.loads(p.read_text())) for p in sorted(directory.glob("*.json"))]
+    """Each status/<repo>.json, refusing one whose repo is not its file name: the dashboard reads
+    each repo's file by name, so a group must come from the file it would read."""
+    statuses = []
+    for p in sorted(directory.glob("*.json")):
+        status = TreeStatus.from_dict(json.loads(p.read_text()))
+        if status.repo != p.stem:
+            raise GardenerError(f"{p.name} holds the status of {status.repo!r}, not {p.stem!r}")
+        statuses.append(status)
+    return statuses
 
 
 def read_previous(path: Path | None) -> dict[str, Any] | None:

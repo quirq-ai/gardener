@@ -126,6 +126,7 @@ def test_github_attempt_failed_steps_reads_that_attempt(monkeypatch):
                                                       {"name": "test (y)", "conclusion": "skipped"}]}]},
         2: {"jobs": [{"status": "in_progress", "steps": [{"name": "build (x)", "conclusion": "failure"}]}]},
         3: {"jobs": [{"status": "completed", "steps": [{"name": "build (x)", "conclusion": "success"}]}]},
+        5: {"total_count": 101, "jobs": [{"status": "completed", "steps": [{"name": "build (x)", "conclusion": "success"}]}]},
     }
 
     def fake_get(path):
@@ -139,4 +140,5 @@ def test_github_attempt_failed_steps_reads_that_attempt(monkeypatch):
     assert b.attempt_failed_steps(REPO, url, 2) is None          # still running
     assert b.attempt_failed_steps(REPO, url, 3) == []            # complete and green
     assert b.attempt_failed_steps(REPO, url, 4) is None          # no such attempt
+    assert b.attempt_failed_steps(REPO, url, 5) is None          # more jobs than one page
     assert b.attempt_failed_steps(REPO, "not a run", 1) is None

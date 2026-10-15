@@ -186,12 +186,27 @@ def test_cli_skips_a_status_file_for_a_repo_no_longer_onboarded(tmp_path, monkey
     assert "::warning::status file for nope" in capsys.readouterr().err
 
 
-def test_cli_refuses_to_write_from_no_status_files(tmp_path, monkeypatch, config_root):
+def test_cli_refuses_to_write_from_no_status_files(tmp_path, monkeypatch, config_root, capsys):
     monkeypatch.setattr(cli, "_backend", lambda args, cfg: object())
-    out = tmp_path / "groups.json"
+    out = tmp_path / "out" / "groups.json"
+    out.parent.mkdir()
     out.write_text("kept\n")
-    for directory in (tmp_path / "missing", tmp_path):
+    (tmp_path / "empty").mkdir()
+    for directory in (tmp_path / "missing", tmp_path / "empty"):
         assert cli.main(["groups", "--config", str(config_root), "--from-status", str(directory), "--out", str(out)]) == 2
+        assert "no status files in" in capsys.readouterr().err
     assert out.read_text() == "kept\n"
     # --previous and --out mean nothing without --from-status
     assert cli.main(["groups", "--config", str(config_root), "--out", str(out)]) == 2
+    assert "--previous and --out only work with --from-status" in capsys.readouterr().err
+
+
+def test_cli_refuses_a_status_file_named_for_another_repo(tmp_path, monkeypatch, config_root, capsys):
+    statuses = tmp_path / "status"
+    statuses.mkdir()
+    (statuses / "xo-space.json").write_text(json.dumps(status(span(), repo="innernet").to_dict()))
+    monkeypatch.setattr(cli, "_backend", lambda args, cfg: object())
+    out = tmp_path / "groups.json"
+    assert cli.main(["groups", "--config", str(config_root), "--from-status", str(statuses), "--out", str(out)]) == 2
+    assert "xo-space.json holds the status of 'innernet'" in capsys.readouterr().err
+    assert not out.exists()
