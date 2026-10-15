@@ -94,9 +94,21 @@ tell are skipped. With `require_culprit_verification` (auto_revert.toml) the cul
 again and its parent once more, so a flaky probe can't name a culprit. A range of one suspect
 still gets verified.
 
+The tree-status job also publishes the groups for the monitoring dashboard's Gardener page, as
+`groups/groups.json` (schema `qq-gardener-groups/1`) on the `tree-status` branch: per red range, its
+builders, first red runs, failure type and failed steps. It is computed from the status files the
+same run just wrote (`qqgarden groups --from-status`), never from a second look, and a range's type
+comes from its first red run's first attempt, which a re-run never changes (or, when that attempt
+shows no failed step, the newest completed attempt that does), so it can differ from the cycle's,
+which reads the newest attempt. A range already published is carried over without any read. The
+step runs after the status push with a 2-minute limit and cannot fail the job; the file is replaced
+only when every read succeeded and committed only on a change, as `groups: N red ranges`, a message
+that names no repo state.
+
 ```sh
 qqgarden groups --config <infra-config> --store <results checkout>
 qqgarden bisect --config <infra-config> --repo-dir <clone> --good <sha> --bad <sha> --run 'qq test'
+qqgarden groups --config <infra-config> --from-status status/ --previous groups/groups.json --out groups/groups.json
 ```
 
 Presubmit plants a break in a 12-commit repo (`tools/plant-break.sh`) and checks that bisection

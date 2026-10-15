@@ -127,6 +127,20 @@ class Backend:
         return [s["name"] for j in doc.get("jobs", []) for s in j.get("steps", [])
                 if s.get("conclusion") in ("failure", "timed_out")]
 
+    def attempt_failed_steps(self, repo: Repo, run_url: str, attempt: int) -> list[str] | None:
+        """The failed steps of one attempt of a run, or None while that attempt is not complete
+        (or does not exist). `/runs/{id}/jobs` lists only the newest attempt, so a re-run would
+        hide the first attempt's failure; this reads the attempt asked for."""
+        run_id = _run_id(run_url)
+        if not run_id or attempt < 1:
+            return None
+        doc = self._get(f"/repos/{repo.slug}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")
+        jobs = (doc or {}).get("jobs") or []
+        if not jobs or any(j.get("status") != "completed" for j in jobs):
+            return None
+        return [s["name"] for j in jobs for s in j.get("steps", [])
+                if s.get("conclusion") in ("failure", "timed_out")]
+
     # --- forge --------------------------------------------------------------------------------
 
     def identity_problem(self) -> str:
