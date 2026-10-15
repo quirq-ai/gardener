@@ -7,7 +7,9 @@ comes from the failed steps of its first red run's FIRST attempt, which a re-run
 when that attempt shows no failed step (cancelled, a startup failure, or green and later re-run
 red), from the newest completed attempt that has one. So the published type can differ from the
 cycle's, which reads the newest attempt. A range already in the previous file, with the same
-first red runs, is carried over without reading anything.
+first red runs and a known type, is carried over without reading anything; one still `unknown`
+is read again, so a re-run that completes red later still gives its type. A carried entry is
+rebuilt from its seven known fields, so nothing else in the previous file survives.
 
 The file holds nothing that changes from run to run (no times, no status commit, no reason text),
 so it changes only when a red range appears, moves or is first read. Writing it is all or nothing:
@@ -46,14 +48,33 @@ def span_steps(repo: str, span: RedSpan, read: AttemptSteps) -> tuple[list[str],
     return [], 0
 
 
+KINDS = ("infra", "build", "test")
+
+
 def key(entry: dict[str, Any]) -> tuple:
     return (entry["repo"], entry["last_good"], entry["first_bad"], tuple(entry["runs"]))
 
 
+def carried(entry: Any) -> dict[str, Any] | None:
+    """A previous entry worth carrying over, rebuilt from its known fields; None when it has a
+    field of the wrong type or no known type yet (`unknown` is read again)."""
+    if not isinstance(entry, dict):
+        return None
+    strings = ("repo", "last_good", "first_bad")
+    lists = ("builders", "runs", "failed_steps")
+    if not all(isinstance(entry.get(f), str) for f in strings):
+        return None
+    if not all(isinstance(entry.get(f), list) and all(isinstance(x, str) for x in entry[f]) for f in lists):
+        return None
+    if entry.get("kind") not in KINDS:
+        return None
+    return {f: entry[f] for f in strings} | {f: list(entry[f]) for f in lists} | {"kind": entry["kind"]}
+
+
 def build(statuses: list[TreeStatus], read: AttemptSteps, previous: dict[str, Any] | None = None) -> dict[str, Any]:
     known = {}
-    if previous and previous.get("schema") == SCHEMA:
-        known = {key(e): e for e in previous.get("groups", []) if isinstance(e, dict) and {"repo", "last_good", "first_bad", "runs"} <= e.keys()}
+    if previous and previous.get("schema") == SCHEMA and isinstance(previous.get("groups"), list):
+        known = {key(e): e for e in map(carried, previous["groups"]) if e is not None}
     groups = []
     for status in statuses:
         by_range: dict[tuple[str, str], list[RedSpan]] = {}
@@ -77,7 +98,7 @@ def build(statuses: list[TreeStatus], read: AttemptSteps, previous: dict[str, An
                 "first_bad": first_bad,
                 "builders": [s.builder for s in spans],
                 "runs": [s.url for s in spans],
-                "kind": next((k for k in ("infra", "build", "test") if k in kinds), "unknown"),
+                "kind": next((k for k in KINDS if k in kinds), "unknown"),
                 "failed_steps": steps,
             })
     groups.sort(key=lambda e: (e["repo"], e["first_bad"], e["last_good"]))

@@ -104,6 +104,8 @@ def cmd_groups(args) -> int:
     backend = _backend(args, cfg)
     if args.from_status:
         return publish_groups(args, cfg, backend)
+    if args.previous or args.out:
+        raise GardenerError("--previous and --out only work with --from-status")
     ev = Evidence(backend, {r.name: r for r in config.repos(cfg)}, Path(args.store) if args.store else None)
     # The results store can be written by any workflow run until test-pipelines checks where each
     # record came from: it is shown, never used to tell the failure type.
@@ -121,13 +123,17 @@ def cmd_groups(args) -> int:
 
 def publish_groups(args, cfg: dict, backend) -> int:
     """The groups file the tree-status job publishes, from the status files it just wrote. Any
-    error leaves --out untouched: nothing new, empty or partial is ever written."""
+    error leaves --out untouched: nothing new, empty or partial is ever written. A status file
+    left over from a repo infra-config no longer onboards is skipped with a warning."""
     from qqgarden import groupsfile
     repos = {r.name: r for r in config.repos(cfg)}
-    items = groupsfile.read_statuses(Path(args.from_status))
-    unknown = sorted({s.repo for s in items} - repos.keys())
-    if unknown:
-        raise GardenerError(f"status files for repos infra-config does not onboard: {', '.join(unknown)}")
+    directory = Path(args.from_status)
+    if not directory.is_dir() or not any(directory.glob("*.json")):
+        raise GardenerError(f"no status files in {directory}: refusing to write an empty groups file")
+    items = groupsfile.read_statuses(directory)
+    for repo in sorted({s.repo for s in items} - repos.keys()):
+        print(f"::warning::status file for {repo}, which infra-config does not onboard: skipped", file=sys.stderr)
+    items = [s for s in items if s.repo in repos]
     previous = groupsfile.read_previous(Path(args.previous)) if args.previous else None
     doc = groupsfile.build(items, lambda repo, url, n: backend.attempt_failed_steps(repos[repo], url, n), previous)
     if args.out:

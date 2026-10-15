@@ -96,9 +96,22 @@ def test_failure_groups_can_never_stop_or_delay_the_status_publish():
     # groups come from the status files just written, and the file is replaced only on success
     assert "--from-status .qq/publish/status" in step and "--out .qq/publish/groups/groups.json" in step
     assert 'if git diff --cached --quiet; then echo "no change"; exit 0; fi' in step
+    # it stages only its own file, never the status files
+    assert re.findall(r"git add .*", step) == ["git add groups/groups.json"]
+    # the token is the push's: no second copy for the Python process
+    assert "\n          TOKEN:" not in step and '"$GITHUB_TOKEN" | base64' in step
     # it pushes like the status step: the job token, for this repo's URL only
     assert "http.https://github.com/${GITHUB_REPOSITORY}.extraheader=AUTHORIZATION: basic $auth" in step
     assert "push origin HEAD:refs/heads/tree-status" in step
+
+
+def test_the_status_commit_message_is_unchanged():
+    # Built from the status files only (non-recursive, so groups/ never joins it): the message the
+    # dashboard reads as the open/close log.
+    step = _step("publish changes")
+    assert 'sorted(glob.glob("status/*.json"))' in step
+    assert 'print(", ".join(f"{d[\'repo\']} {d[\'state\']}" for d in states))' in step
+    assert re.findall(r'commit -q -m "([^"]*)"', step) == ["tree-status: $msg"]
 
 
 def test_the_groups_commit_names_no_repo_state():

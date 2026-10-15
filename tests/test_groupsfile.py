@@ -89,6 +89,45 @@ def test_an_unchanged_range_is_carried_over_and_a_moved_one_is_read_again():
     assert again.calls == [(RUN, 1)]
 
 
+def test_an_unknown_range_is_read_again_until_a_completed_attempt_shows_its_type():
+    # attempt 1 had no jobs (a startup failure): unknown
+    first = groupsfile.build([status(span())], Reader({}))
+    assert first["groups"][0]["kind"] == "unknown"
+    # its re-run completed red with a failed step: same range and run, read again
+    rerun = Reader({(RUN, 2): ["build (x)"]})
+    again = groupsfile.build([status(span(attempt=2))], rerun, first)
+    assert rerun.calls == [(RUN, 1), (RUN, 2)] and again["groups"][0]["kind"] == "build"
+
+
+def test_a_carried_entry_keeps_only_its_known_fields_or_is_read_again():
+    read = Reader({(RUN, 1): ["build (x)"]})
+    first = groupsfile.build([status(span())], read)
+    planted = json.loads(json.dumps(first))
+    planted["groups"][0]["title"] = "a commit title that must never be published"
+    again = Reader({})
+    assert groupsfile.build([status(span())], again, planted) == first and again.calls == []
+    for broken in ({"kind": None}, {"failed_steps": None}, {"runs": [[RUN]]}, {"runs": [{"u": RUN}]}, {"repo": 1}):
+        bad = json.loads(json.dumps(first))
+        bad["groups"][0].update(broken)
+        again.calls.clear()
+        groupsfile.build([status(span())], again, bad)
+        assert again.calls == [(RUN, 1)], broken
+    for junk in ({"schema": groupsfile.SCHEMA, "groups": "x"}, {"schema": groupsfile.SCHEMA, "groups": [1, None]}):
+        again.calls.clear()
+        groupsfile.build([status(span())], again, junk)
+        assert again.calls == [(RUN, 1)]
+
+
+def test_write_replaces_the_file_through_a_temp_file(tmp_path, monkeypatch):
+    out = tmp_path / "groups" / "groups.json"
+    seen = []
+    real = groupsfile.os.replace
+    monkeypatch.setattr(groupsfile.os, "replace", lambda a, b: (seen.append((a, b, out.exists())), real(a, b)))
+    groupsfile.write(out, {"schema": groupsfile.SCHEMA, "groups": []})
+    assert seen == [(out.with_name(".groups.json.tmp"), out, False)]
+    assert out.read_text() == groupsfile.to_json({"schema": groupsfile.SCHEMA, "groups": []})
+
+
 def test_the_file_carries_nothing_that_changes_per_run():
     doc = groupsfile.build([status(span())], Reader({(RUN, 1): ["build (x)"]}))
     text = groupsfile.to_json(doc)
@@ -130,11 +169,29 @@ def test_cli_writes_all_or_nothing(tmp_path, monkeypatch, config_root):
     assert not fresh.exists()
 
 
-def test_cli_refuses_a_repo_infra_config_does_not_onboard(tmp_path, monkeypatch, config_root):
+def test_cli_skips_a_status_file_for_a_repo_no_longer_onboarded(tmp_path, monkeypatch, config_root, capsys):
     statuses = tmp_path / "status"
     statuses.mkdir()
     (statuses / "nope.json").write_text(json.dumps(status(span(), repo="nope").to_dict()))
+    (statuses / "xo-space.json").write_text(json.dumps(status(span(), repo="xo-space").to_dict()))
+
+    class Backend:
+        def attempt_failed_steps(self, repo, url, n):
+            return ["build (x)"] if n == 1 else None
+
+    monkeypatch.setattr(cli, "_backend", lambda args, cfg: Backend())
+    out = tmp_path / "groups.json"
+    assert cli.main(["groups", "--config", str(config_root), "--from-status", str(statuses), "--out", str(out)]) == 0
+    assert [g["repo"] for g in json.loads(out.read_text())["groups"]] == ["xo-space"]
+    assert "::warning::status file for nope" in capsys.readouterr().err
+
+
+def test_cli_refuses_to_write_from_no_status_files(tmp_path, monkeypatch, config_root):
     monkeypatch.setattr(cli, "_backend", lambda args, cfg: object())
     out = tmp_path / "groups.json"
-    assert cli.main(["groups", "--config", str(config_root), "--from-status", str(statuses), "--out", str(out)]) == 2
-    assert not out.exists()
+    out.write_text("kept\n")
+    for directory in (tmp_path / "missing", tmp_path):
+        assert cli.main(["groups", "--config", str(config_root), "--from-status", str(directory), "--out", str(out)]) == 2
+    assert out.read_text() == "kept\n"
+    # --previous and --out mean nothing without --from-status
+    assert cli.main(["groups", "--config", str(config_root), "--out", str(out)]) == 2

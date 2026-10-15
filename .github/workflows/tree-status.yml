@@ -3,7 +3,8 @@
 #   status/<repo>.json  (schema qq-tree-status/1: open, closed or unknown, with regression ranges)
 #   status/README.md    (the same as a table)
 #   groups/groups.json  (schema qq-gardener-groups/1: each red range's failure type and failed steps)
-# It commits only when a status changes, so the branch history is the tree's open/close log.
+# It commits only when a status changes, so the branch history is the tree's open/close log
+# (a `groups: N red ranges` commit names no repo state and is not part of that log).
 # The job fails when a main commit since onboarding has no post-submit result (GAR-01 done-when).
 #
 # The `cycle` job then gardens (V0-GAR-03): it groups failures, and for each verified culprit makes
@@ -137,7 +138,6 @@ jobs:
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          TOKEN: ${{ github.token }}
         run: |
           python -m qqgarden.cli groups --config .qq/infra-config --from-status .qq/publish/status \
             --previous .qq/publish/groups/groups.json --out .qq/publish/groups/groups.json
@@ -148,7 +148,7 @@ jobs:
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
               commit -q -m "groups: $n red ranges" -m "from tree-status $(git rev-parse HEAD)"
-          auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
           git -c "http.https://github.com/${GITHUB_REPOSITORY}.extraheader=AUTHORIZATION: basic $auth" \
               push origin HEAD:refs/heads/tree-status
       - name: every main commit has a post-submit result (V0-GAR-01 done-when)

@@ -63,7 +63,8 @@ qqgarden status --config ... --backend snapshot --snapshot tests/fixtures/every-
 
 The `tree-status` workflow runs it every 5 minutes and publishes `status/<repo>.json` (schema
 `qq-tree-status/1`) and `status/README.md` to this repo's `tree-status` branch, committing only
-when something changes, so that branch's log is the tree's open and close history (a quiet branch
+when something changes, so that branch's `tree-status:` commits are the tree's open and close
+history (its `groups:` commits, below, name no repo state; a quiet branch
 is not a stalled gardener: the workflow's run list shows each check). GitHub fires cron schedules
 best-effort, so each run on main dispatches the next one about 5 minutes later; the cron only
 restarts that chain if it stops. Setting the repo variable `QQ_TREE_STATUS_CHAIN` to `off` stops the
@@ -100,7 +101,8 @@ builders, first red runs, failure type and failed steps. It is computed from the
 same run just wrote (`qqgarden groups --from-status`), never from a second look, and a range's type
 comes from its first red run's first attempt, which a re-run never changes (or, when that attempt
 shows no failed step, the newest completed attempt that does), so it can differ from the cycle's,
-which reads the newest attempt. A range already published is carried over without any read. The
+which reads the newest attempt. A range already published with a known type is carried over without
+any read; one still `unknown` is read again. The
 step runs after the status push with a 2-minute limit and cannot fail the job; the file is replaced
 only when every read succeeded and committed only on a change, as `groups: N red ranges`, a message
 that names no repo state.
