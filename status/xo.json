@@ -2,9 +2,9 @@
   "branch": "main",
   "builders": {
     "xo-postsubmit": {
-      "commit": "33fd15b6a990987874479f650cfed7b700a436eb",
+      "commit": "ca83435b282a88b2f91e6af86933849d9b88221f",
       "state": "green",
-      "url": "https://github.com/quirq-ai/xo/actions/runs/39654207989"
+      "url": "https://github.com/quirq-ai/xo/actions/runs/39670228376"
     }
   },
   "coverage": {
@@ -12,13 +12,11 @@
     "cancelled": [],
     "commits": 4,
     "missing": [],
-    "pending": [
-      "ca83435b282a88b2f91e6af86933849d9b88221f xo-postsubmit"
-    ],
+    "pending": [],
     "retried": [],
     "since": "10937c629fae9bb823dc1ff77f3ca59b4dc1aa29"
   },
-  "green": "33fd15b6a990987874479f650cfed7b700a436eb",
+  "green": "ca83435b282a88b2f91e6af86933849d9b88221f",
   "head": "ca83435b282a88b2f91e6af86933849d9b88221f",
   "notes": [],
   "reason": "every post-submit builder's newest verdict is green",
