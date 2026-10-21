@@ -22,7 +22,8 @@ Plan and every v0 item: [quirq-ai/infra-config](https://github.com/quirq-ai/infr
   [test-pipelines](https://github.com/quirq-ai/test-pipelines) and the backend.
 - GitHub-specific code sits behind the `backend` field (`github` now, `launchpad` later).
 - Agents land clean build-break reverts alone, within the caps. Test-failure reverts are proposed
-  only. Reverts in xo-space and innernet go to suraj to merge during v0.
+  only. Reverts in every onboarded repo (xo-space, innernet, website and xo) go to suraj to merge
+  during v0.
 
 ## Tree status and red detection (V0-GAR-01)
 
@@ -153,7 +154,7 @@ failure group it finds a culprit, and reverts it if the caps allow:
   their own at most 4 a day and only for culprits under 6 h old; test failures are proposed only
   (submit limit 0). An `unknown` failure is never reverted.
 - **Who may auto-land.** Only repos listed in `auto_land_repos` (asked of infra-config for
-  CFG-05). With none, every revert is proposed: in v0, xo-space and innernet reverts go to suraj
+  CFG-05). With none, every revert is proposed: in v0, every onboarded repo's reverts go to suraj
   to merge.
 - **Clean only.** The revert is made in a scratch clone first; one that conflicts or changes
   nothing is refused and not counted.
@@ -243,9 +244,10 @@ TODO(suraj): file stubs in the affected repo instead, which needs the bot identi
 | V0-GAR-04 | Failure record and postmortem stub per revert | #5 | merged |
 
 Every item's done-when runs offline in presubmit. The wave 4 audit's fixes (B1, B2, S1-S8) are
-merged (#8). Live today: the `tree-status` workflow publishes tree status for xo-space and innernet
-on the `tree-status` branch, and the post-submits with the backfill input are delivered (xo-space
-#215, innernet #40). Reverts wait on the quirq gardener App, which does not exist yet, and one
+merged (#8). Live today: the `tree-status` workflow publishes tree status on the `tree-status`
+branch for every repo infra-config onboards at the `pins.toml` commit (xo-space, innernet, website
+and xo since the repin to infra-config 40d8f2b), and the post-submits with the backfill input are
+delivered (xo-space #215, innernet #40, website #1, xo #58). Reverts wait on the quirq gardener App, which does not exist yet, and one
 manual run with `bootstrap-ledger` (there is no `ledger` branch yet). No revert lands on its own
 until a repo is listed in `auto_land_repos`.
 
