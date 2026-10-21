@@ -3,7 +3,7 @@
 
 [infra-config]
 source = "https://github.com/quirq-ai/infra-config"
-commit = "bf3ad29834d85489c49aa6d41ec3c7e59474b746"   # main after #11: backfill dispatch (#10), auto_land_repos (#11)
+commit = "40d8f2b3c214c52e285a1528d9e5734a9328fa7c"   # main after #37: onboards website (#31) and xo (#37); auto_revert.toml unchanged since #11
 
 [test-pipelines]
 source = "https://github.com/quirq-ai/test-pipelines"
