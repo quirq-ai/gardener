@@ -54,7 +54,9 @@ and those runs, and works out:
   itself stands in for a push run only when there is none (or it was cancelled). A backfill runs main's newer workflow on the older commit,
   so a red backfill never names a culprit by itself: the cycle asks for a bisection. A hole whose
   backfill was cancelled too is left for a person, and re-running its push run clears it.
-  Dispatching needs the bot identity.
+  Dispatching needs the bot identity. Until the App exists nothing is dispatched, so a hole keeps
+  the check red until a person runs that builder's workflow (`qq <builder>`, Run workflow) on
+  `main` with the commit.
 
 ```sh
 qqgarden status --config <infra-config checkout>                 # live, github backend
@@ -247,9 +249,11 @@ Every item's done-when runs offline in presubmit. The wave 4 audit's fixes (B1, 
 merged (#8). Live today: the `tree-status` workflow publishes tree status on the `tree-status`
 branch for every repo infra-config onboards at the `pins.toml` commit (xo-space, innernet, website
 and xo since the repin to infra-config 40d8f2b), and the post-submits with the backfill input are
-delivered (xo-space #215, innernet #40, website #1, xo #58). Reverts wait on the quirq gardener App, which does not exist yet, and one
-manual run with `bootstrap-ledger` (there is no `ledger` branch yet). No revert lands on its own
-until a repo is listed in `auto_land_repos`.
+delivered (xo-space #215, innernet #40, website #1, xo #58). Reverts wait on the quirq gardener
+App, which does not exist yet, and one manual run with `bootstrap-ledger` (there is no `ledger`
+branch yet). Install the App on all four repos before its secrets are set: the workflow mints its
+token for exactly the repos infra-config onboards, and that step fails if one is missing. No
+revert lands on its own until a repo is listed in `auto_land_repos`.
 
 Out of scope for v0: test-failure reverts that land, revert precision, postmortem drafting and
 canary bisection (v1); agents holding the rotation (v2).
