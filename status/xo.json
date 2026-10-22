@@ -2,26 +2,26 @@
   "branch": "main",
   "builders": {
     "xo-postsubmit": {
-      "commit": "0546efd2f6f0839496ba5c64e9785fdd6c55d7c8",
-      "state": "green",
-      "url": "https://github.com/quirq-ai/xo/actions/runs/39781919746"
+      "commit": "",
+      "state": "none",
+      "url": ""
     }
   },
   "coverage": {
     "backfilling": [],
     "cancelled": [],
-    "commits": 13,
+    "commits": 0,
     "missing": [],
     "pending": [],
     "retried": [],
-    "since": "10937c629fae9bb823dc1ff77f3ca59b4dc1aa29"
+    "since": ""
   },
-  "green": "0546efd2f6f0839496ba5c64e9785fdd6c55d7c8",
+  "green": "",
   "head": "0546efd2f6f0839496ba5c64e9785fdd6c55d7c8",
   "notes": [],
-  "reason": "every post-submit builder's newest verdict is green",
+  "reason": "no post-submit verdict yet from xo-postsubmit",
   "red": [],
   "repo": "xo",
   "schema": "qq-tree-status/1",
-  "state": "open"
+  "state": "unknown"
 }
