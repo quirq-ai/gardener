@@ -2,26 +2,26 @@
   "branch": "main",
   "builders": {
     "website-postsubmit": {
-      "commit": "",
-      "state": "none",
-      "url": ""
+      "commit": "d2f230671a91919b50cc296a40d422085401fe78",
+      "state": "green",
+      "url": "https://github.com/quirq-ai/website/actions/runs/38492355616"
     }
   },
   "coverage": {
     "backfilling": [],
     "cancelled": [],
-    "commits": 0,
+    "commits": 24,
     "missing": [],
     "pending": [],
     "retried": [],
-    "since": ""
+    "since": "8f6988a747aed43202e21ded6d1de2ce673c50cd"
   },
-  "green": "",
+  "green": "d2f230671a91919b50cc296a40d422085401fe78",
   "head": "d2f230671a91919b50cc296a40d422085401fe78",
   "notes": [],
-  "reason": "no post-submit verdict yet from website-postsubmit",
+  "reason": "every post-submit builder's newest verdict is green",
   "red": [],
   "repo": "website",
   "schema": "qq-tree-status/1",
-  "state": "unknown"
+  "state": "open"
 }
