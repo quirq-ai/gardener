@@ -1,20 +1,4 @@
 {
-  "groups": [
-    {
-      "builders": [
-        "xo-postsubmit"
-      ],
-      "failed_steps": [
-        "xo-postsubmit: test (python-package)"
-      ],
-      "first_bad": "4a014b51df3d4bcbf50416083d0d0dccb67c2379",
-      "kind": "test",
-      "last_good": "6e6d79b96310968278d3aab14ddc2b49c88642f3",
-      "repo": "xo",
-      "runs": [
-        "https://github.com/quirq-ai/xo/actions/runs/41023279489"
-      ]
-    }
-  ],
+  "groups": [],
   "schema": "qq-gardener-groups/1"
 }
