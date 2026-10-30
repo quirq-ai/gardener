@@ -2,9 +2,9 @@
   "branch": "main",
   "builders": {
     "xo-postsubmit": {
-      "commit": "6e6d79b96310968278d3aab14ddc2b49c88642f3",
-      "state": "green",
-      "url": "https://github.com/quirq-ai/xo/actions/runs/40504105263"
+      "commit": "4a014b51df3d4bcbf50416083d0d0dccb67c2379",
+      "state": "red",
+      "url": "https://github.com/quirq-ai/xo/actions/runs/41023279489"
     }
   },
   "coverage": {
@@ -12,18 +12,33 @@
     "cancelled": [],
     "commits": 25,
     "missing": [],
-    "pending": [
-      "4a014b51df3d4bcbf50416083d0d0dccb67c2379 xo-postsubmit"
-    ],
+    "pending": [],
     "retried": [],
     "since": "10937c629fae9bb823dc1ff77f3ca59b4dc1aa29"
   },
   "green": "6e6d79b96310968278d3aab14ddc2b49c88642f3",
   "head": "4a014b51df3d4bcbf50416083d0d0dccb67c2379",
   "notes": [],
-  "reason": "every post-submit builder's newest verdict is green",
-  "red": [],
+  "reason": "red: xo-postsubmit since 4a014b51df3d",
+  "red": [
+    {
+      "builder": "xo-postsubmit",
+      "first_bad": "4a014b51df3d4bcbf50416083d0d0dccb67c2379",
+      "first_bad_attempt": 1,
+      "first_bad_backfill": false,
+      "first_bad_running": false,
+      "last_good": "6e6d79b96310968278d3aab14ddc2b49c88642f3",
+      "last_good_attempt": 1,
+      "last_good_running": false,
+      "last_good_url": "https://github.com/quirq-ai/xo/actions/runs/40504105263",
+      "latest_bad": "4a014b51df3d4bcbf50416083d0d0dccb67c2379",
+      "suspects": [
+        "4a014b51df3d4bcbf50416083d0d0dccb67c2379"
+      ],
+      "url": "https://github.com/quirq-ai/xo/actions/runs/41023279489"
+    }
+  ],
   "repo": "xo",
   "schema": "qq-tree-status/1",
-  "state": "open"
+  "state": "closed"
 }
