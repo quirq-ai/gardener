@@ -10,14 +10,16 @@
   "coverage": {
     "backfilling": [],
     "cancelled": [],
-    "commits": 29,
+    "commits": 30,
     "missing": [],
-    "pending": [],
+    "pending": [
+      "b7124b07dc309174c9239389559ae25af49f0596 xo-space-postsubmit"
+    ],
     "retried": [],
     "since": "d70c48aed3dda27ee73fbc44d9b00cd60073356c"
   },
   "green": "6dfc8e730fb16b530b015741d97d386716c3017f",
-  "head": "6dfc8e730fb16b530b015741d97d386716c3017f",
+  "head": "b7124b07dc309174c9239389559ae25af49f0596",
   "notes": [],
   "reason": "every post-submit builder's newest verdict is green",
   "red": [],
